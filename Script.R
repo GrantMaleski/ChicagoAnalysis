@@ -7,6 +7,7 @@ library(ggplot2)
 library(tigris)
 library(lubridate)
 library(dplyr)
+library(tidyverse)
 
 # Set up Google Maps API
 register_google(key = "AIzaSyBFtOlgqh_2oOpGILbJJEHVn-VzqJEP1rI")
@@ -184,9 +185,6 @@ sfzone_crashes <- sum(crashes_clean$distance_to_sfzone.y < 201, na.rm = TRUE)
 print(sfzone_crashes)
 
 
-
-
-
 # Convert safety zones and cameras to sf objects
 safety_zones_sf <- st_as_sf(chicago_safety_zones, coords = c("Longitude", "Latitude"), crs = 4326)
 cameras_sf <- st_as_sf(cameras, coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
@@ -219,9 +217,6 @@ print(head(safety_zones_with_cameras))
 
 
 
-
-
-
 # Create spatial objects for analysis
 safety_zones_sf <- st_as_sf(safety_zones_with_cameras, coords = c("Longitude", "Latitude"), crs = 4326)
 safety_zones_sf$orig_lon <- st_coordinates(safety_zones_sf)[,1]
@@ -244,10 +239,16 @@ crash_counts_by_zone <- crashes_in_buffer_filtered %>%
 
 
 
-# Join the crash counts to the filtered crashes
+camera_data <- cameras %>%
+  select(Name = LOCATION.ID, go_live_date = GO.LIVE.DATE) %>%
+  mutate(go_live_date = as.character(go_live_date))  # Convert date to character if needed
+
+# Join crash counts and camera data to the filtered crashes
 crashes_with_counts <- crashes_in_buffer_filtered %>%
   left_join(crash_counts_by_zone, by = "Name") %>%
-  mutate(crash_count = ifelse(is.na(crash_count), 0, crash_count))  # Handle NA values
+  mutate(crash_count = ifelse(is.na(crash_count), 0, crash_count)) %>%  # Handle NA values for crash count
+  left_join(camera_data, by = "Name") %>%  # Join camera data
+  mutate(go_live_date = ifelse(is.na(go_live_date), "N/A", go_live_date))  # Handle NA values for go_live_date
 
 # Check the result
 print(head(crashes_with_counts))
@@ -268,50 +269,60 @@ crash_counts_monthly <- crashes_in_buffer_filtered %>%
   group_by(Name, crash_year, crash_month) %>%
   summarise(
     total_crashes = n(),
-    serious_fatal_crashes = sum(is_serious_fatal, na.rm = TRUE),
-    bike_ped_crashes = sum(is_bike_ped, na.rm = TRUE),
-    speed_related_crashes = sum(is_speed_related, na.rm = TRUE),
-    youth_related_crashes = sum(is_youth_related, na.rm = TRUE)
+    serious_fatal_crashes = sum(fatalities, na.rm = TRUE),
+    bike_ped_crashes = sum(bikers_pedestrians, na.rm = TRUE),
+    speed_related_crashes = sum(PRIM_CONTRIBUTORY_CAUSE=='FAILING TO REDUCE SPEED TO AVOID CRASH', na.rm = TRUE),
+    youth_related_crashes = sum(under_18, na.rm = TRUE)
   ) %>%
   ungroup() %>%
   st_drop_geometry()
 
 crashes_sf$CRASH_DATE <- as.Date(crashes_sf$CRASH_DATE, format = "%Y-%m-%d")
 
-# Create all possible year-month combinations
-date_range <- seq(floor_date(min(crashes_sf$CRASH_DATE), "month"),
-                  ceiling_date(max(crashes_sf$CRASH_DATE), "month") - days(1),
-                  by = "month")
 
-all_combinations <- expand.grid(
-  ID = all_cameras,
-  date = date_range
+crash_counts_monthly <- crash_counts_monthly %>%
+  mutate(crash_year = as.integer(crash_year))
+
+crash_counts_monthly <- crash_counts_monthly %>%
+  mutate(crash_month = as.integer(crash_month))
+
+
+# Create a complete sequence of all year-month combinations
+start_year <- min(crash_counts_monthly$crash_year, na.rm = TRUE)
+end_year <- max(crash_counts_monthly$crash_year, na.rm = TRUE)
+
+all_zones <- unique(crashes_in_buffer_filtered$Name)
+
+all_months <- expand_grid(
+  crash_year = start_year:end_year,
+  crash_month = 1:12
+) %>%
+  arrange(crash_year, crash_month)
+
+# Create a dataframe with all combinations of zones and dates
+complete_zones_monthly <- expand_grid(
+  Name = all_zones,
+  crash_year = start_year:end_year,
+  crash_month = 1:12
 )
 
-all_combinations <- all_combinations %>%
-  mutate(
-    crash_year = lubridate::year(date),
-    crash_month = lubridate::month(date)
-  )
+# Join the complete list with the crash counts
+complete_crash_counts <- complete_zones_monthly %>%
+  left_join(crash_counts_monthly, by = c("Name", "crash_year", "crash_month")) %>%
+  mutate(total_crashes = replace_na(total_crashes, 0),
+         serious_fatal_crashes = replace_na(serious_fatal_crashes, 0),
+         bike_ped_crashes = replace_na(bike_ped_crashes, 0),
+         speed_related_crashes = replace_na(speed_related_crashes, 0),
+         youth_related_crashes = replace_na(youth_related_crashes, 0))
 
-# Join the crash counts to all combinations
-cameras_monthly_crashes <- all_combinations %>%
-  left_join(crash_counts_monthly, by = c("ID", "crash_year", "crash_month"))
 
-# Replace NA with 0 for months with no crashes
-cameras_monthly_crashes <- cameras_monthly_crashes %>%
-  mutate(across(c(total_crashes:youth_related_crashes), ~ifelse(is.na(.), 0, .)))
+# Perform the join allowing the many-to-many relationship
+complete_crash_counts <- complete_crash_counts %>%
+  left_join(safety_zones_with_cameras %>% 
+              select(Name, GO.LIVE.DATE), 
+            by = "Name", 
+            relationship = "many-to-many")
 
-# Add camera details if needed
-cameras_monthly_crashes <- cameras_monthly_crashes %>%
-  left_join(st_drop_geometry(cameras_sf), by = "ID")
-
-# Ensure the data is sorted by camera ID, year, and month
-cameras_monthly_crashes <- cameras_monthly_crashes %>%
-  arrange(ID, crash_year, crash_month)
-
-# View the results
-print(head(cameras_monthly_crashes, 20))
 
 
 
@@ -322,11 +333,11 @@ cameras_monthly_crashes$High_Youth_Census_Tract <- 0  # Sample value for High-Yo
 
 
 # Calculate the Safety Zone Score
-cameras_monthly_crashes$Safety_Zone_Score <- cameras_monthly_crashes$total_crashes +
-  cameras_monthly_crashes$serious_fatal_crashes +
-  cameras_monthly_crashes$bike_ped_crashes +
-  2 * cameras_monthly_crashes$speed_related_crashes +
-  2 * cameras_monthly_crashes$youth_related_crashes +
+crash_counts_monthly$Safety_Zone_Score <- cameras_monthly_crashes$total_crashes +
+  crash_counts_monthly$serious_fatal_crashes +
+  crash_counts_monthly$bike_ped_crashes +
+  2 * crash_counts_monthly$speed_related_crashes +
+  2 * crash_counts_monthly$youth_related_crashes +
   cameras_monthly_crashes$High_Youth_Census_Tract
 
 cols <- c(
@@ -340,28 +351,5 @@ cameras_monthly_crashes <- cameras_monthly_crashes[, cols]
 
 # Print the updated data frame
 print(df)
-
-
-
-
-
-# Calculate the Safety Zone Score
-cameras_monthly_crashes$Safety_Zone_Score <- cameras_monthly_crashes$total_crashes +
-  cameras_monthly_crashes$serious_fatal_crashes +
-  cameras_monthly_crashes$bike_ped_crashes +
-  2 * cameras_monthly_crashes$speed_related_crashes +
-  2 * cameras_monthlyy_crashes$youth_related_crashes +
-  cameras_monthly_crashes$High_Youth_Census_Tract
-
-new_cols <- c(
-  names(cameras_monthly_crashes)[1:(8 - 1)],  # Columns before LOCATION.ID
-  "High_Youth_Census_Tract",
-  "Safety_Zone_Score",
-  "LOCATION.ID",  # Keep LOCATION.ID in the new order
-  names(cameras_monthly_crashes)[(8 + 1):length(names(cameras_monthly_crashes))]  # Columns after LOCATION.ID
-)
-
-# Reorder columns in the data frame
-cameras_monthly_crashes <- cameras_monthly_crashes[, new_cols]
 
 
