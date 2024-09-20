@@ -1,6 +1,6 @@
 # Load required packages
-install.packages(c("ggmap", "geosphere", "sf", "tigris", "lubridate"))
-library(ggmap)
+install.packages(c("tidygeocoder", "geosphere", "sf", "tigris","tidygeocoder", "lubridate"))
+library(tidygeocoder)
 library(geosphere)
 library(sf)
 library(ggplot2)
@@ -8,9 +8,9 @@ library(tigris)
 library(lubridate)
 library(dplyr)
 library(tidyverse)
+library(tidygeocoder)
 
-# Set up Google Maps API
-register_google(key = "AIzaSyBFtOlgqh_2oOpGILbJJEHVn-VzqJEP1rI")
+
 
 # Load data
 crashes <- read.csv('/Users/grantmaleski/Downloads/Traffic_Crashes_-_Crashes_20240408.csv')
@@ -18,6 +18,9 @@ cameras <- read.csv('/Users/grantmaleski/Downloads/Speed_Camera_Locations_202404
 chicago_safety_zones <- read.csv('/Users/grantmaleski/Downloads/chicago_safety_areas.csv')
 chicago_map <- read_sf("/Users/grantmaleski/Downloads/WARDS_2015")
 people <- read.csv('/Users/grantmaleski/Downloads/Traffic_Crashes_-_People.csv')
+census_information <- read_csv("/Users/grantmaleski/Downloads/Chicago_Population_Counts_20240907.csv")
+
+
 
 # Clean and preprocess data
 ## Some of the addresses aren't formatted properly for API call - Fix addresses
@@ -27,11 +30,31 @@ chicago_safety_zones[1402,3] <- '7001 West 59th St'
 ## Geocode addresses via Google Maps API
 addresses <- chicago_safety_zones$Address
 chicago_addresses <- paste(addresses, ", Chicago, IL", sep = "")
-geocodes <- geocode(chicago_addresses)
-geocoded_df <- data.frame(Zone_Name = chicago_safety_zones$Name,
-                          Address = chicago_addresses, 
-                          Latitude = geocodes$lat, 
-                          Longitude = geocodes$lon)
+geocoded_df <- tibble(address = chicago_addresses) %>%
+  geocode(address, method = 'osm', full_results = TRUE)
+
+coordinates_df <- data.frame(lat = geocoded_df$lat, lon = geocoded_df$long)
+
+# Perform reverse geocoding to get zip codes
+geocoded_with_zip <- reverse_geocode(
+  .tbl = coordinates_df,  # Pass the data frame with lat/lon
+  lat = "lat",            # Specify the latitude column
+  long = "lon",           # Specify the longitude column
+  method = "osm",         # Method for reverse geocoding
+  full_results = TRUE
+)
+
+
+chicago_safety_zones_list <- data.frame(
+  Name = chicago_safety_zones$Name,
+  Address = chicago_addresses, 
+  Latitude = geocoded_with_zip$lat, 
+  Longitude = geocoded_with_zip$lon,
+  Zip_Code = geocoded_with_zip$postcode
+)
+
+
+
 
 
 # Process dates
@@ -83,15 +106,16 @@ crash_location_list <- data.frame(
 )
 
 
-chicago_safety_zones_list <- data.frame(Latitude = chicago_safety_zones$Latitude, 
-                                        Longitude = chicago_safety_zones$Longitude)
+
+
+
+
+
 
 camera_location_list <- data.frame(Latitude = cameras$LATITUDE, 
                                    Longitude = cameras$LONGITUDE)
 
-# Add latitude and longitude to chicago_safety_zones
-chicago_safety_zones$Latitude <- geocodes$lat
-chicago_safety_zones$Longitude <- geocodes$lon
+
 
 
 
@@ -186,20 +210,19 @@ print(sfzone_crashes)
 
 
 # Convert safety zones and cameras to sf objects
-safety_zones_sf <- st_as_sf(chicago_safety_zones, coords = c("Longitude", "Latitude"), crs = 4326)
 cameras_sf <- st_as_sf(cameras, coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
 
 # Find the nearest safety zone for each camera
-nearest_safety_zone <- st_nearest_feature(cameras_sf, safety_zones_sf)
+nearest_safety_zone <- st_nearest_feature(cameras_sf, chicago_safety_zones_list_sf)
 
 # Create a dataframe of camera assignments
 camera_assignments <- data.frame(
   camera_id = cameras_sf$ID,
-  safety_zone_name = safety_zones_sf$Name[nearest_safety_zone]
+  safety_zone_name = chicago_safety_zones_list_sf$Name[nearest_safety_zone]
 )
 
 # Join camera information to safety zones
-safety_zones_with_cameras <- safety_zones_sf %>%
+safety_zones_with_cameras <- chicago_safety_zones_list_sf %>%
   left_join(camera_assignments, by = c("Name" = "safety_zone_name")) %>%
   left_join(
     cameras_sf %>% 
@@ -212,8 +235,14 @@ safety_zones_with_cameras <- safety_zones_sf %>%
 safety_zones_with_cameras <- safety_zones_with_cameras %>%
   mutate(across(c(camera_id, GO.LIVE.DATE, LOCATION.ID), ~ifelse(is.na(.), "N/A", as.character(.))))
 
-# View the result
-print(head(safety_zones_with_cameras))
+
+
+
+
+
+
+
+
 
 
 
@@ -250,8 +279,6 @@ crashes_with_counts <- crashes_in_buffer_filtered %>%
   left_join(camera_data, by = "Name") %>%  # Join camera data
   mutate(go_live_date = ifelse(is.na(go_live_date), "N/A", go_live_date))  # Handle NA values for go_live_date
 
-# Check the result
-print(head(crashes_with_counts))
 
 
 #transform dates to right format
@@ -288,25 +315,24 @@ crash_counts_monthly <- crash_counts_monthly %>%
 
 
 # Create a complete sequence of all year-month combinations
-start_year <- min(crash_counts_monthly$crash_year, na.rm = TRUE)
-end_year <- max(crash_counts_monthly$crash_year, na.rm = TRUE)
 
-all_zones <- unique(crashes_in_buffer_filtered$Name)
+start_year <- min(crashes$crash_year)
+end_year <- max(crashes$crash_year)
 
-all_months <- expand_grid(
+
+unique_zones <- unique(safety_zones_with_cameras$Name)
+
+# Create a dataframe with all combinations of zones and dates, including crash_date
+complete_zones_monthly <- expand_grid(
+  Name = unique_zones,
   crash_year = start_year:end_year,
   crash_month = 1:12
 ) %>%
-  arrange(crash_year, crash_month)
+  # Create a crash_date column by combining crash_year and crash_month
+  mutate(crash_date = as.Date(paste(crash_year, crash_month, "01", sep = "-"))) %>%
+  arrange(crash_date)
 
-# Create a dataframe with all combinations of zones and dates
-complete_zones_monthly <- expand_grid(
-  Name = all_zones,
-  crash_year = start_year:end_year,
-  crash_month = 1:12
-)
-
-# Join the complete list with the crash counts
+# Join the complete list with the crash counts, including both Name and Zip_Code
 complete_crash_counts <- complete_zones_monthly %>%
   left_join(crash_counts_monthly, by = c("Name", "crash_year", "crash_month")) %>%
   mutate(total_crashes = replace_na(total_crashes, 0),
@@ -316,40 +342,186 @@ complete_crash_counts <- complete_zones_monthly %>%
          youth_related_crashes = replace_na(youth_related_crashes, 0))
 
 
-# Perform the join allowing the many-to-many relationship
+
+
+
+
+
 complete_crash_counts <- complete_crash_counts %>%
   left_join(safety_zones_with_cameras %>% 
-              select(Name, GO.LIVE.DATE), 
-            by = "Name", 
-            relationship = "many-to-many")
+              select(Name, Zip_Code, GO.LIVE.DATE), 
+            by = c("Name"), 
+            relationship = "one-to-one")
+
+
+#see if safety zones are high census or not
+
+census_information <- census_information %>%
+  filter(`Geography` == "ZIP Code") %>%
+  mutate(
+    youth_population = `Population - Age 0-17`,
+    total_population = `Population - Total`,
+    youth_percentage = (youth_population / total_population) * 100
+  )
+
+
+#determined by the city
+high_youth_threshold <- 30
+
+# Flag ZIP codes with high youth percentage
+census_information <- census_information %>%
+  mutate(high_youth_census = ifelse(youth_percentage >= 30, 20, 0))
+
+
+# Join the high youth flag to complete_crash_counts
+complete_crash_counts <- complete_crash_counts %>%
+  left_join(census_information %>%
+              select(Geography, high_youth_census), 
+            by = c("Zip_Code" = "Geography")) %>%
+  mutate(high_youth_census = replace_na(high_youth_census, 0))
 
 
 
-
-
-# Assuming the column High_Youth_Census_Tract is present in the dataframe
-cameras_monthly_crashes$High_Youth_Census_Tract <- 0  # Sample value for High-Youth Census Tract
 
 
 
 # Calculate the Safety Zone Score
-crash_counts_monthly$Safety_Zone_Score <- cameras_monthly_crashes$total_crashes +
-  crash_counts_monthly$serious_fatal_crashes +
-  crash_counts_monthly$bike_ped_crashes +
-  2 * crash_counts_monthly$speed_related_crashes +
-  2 * crash_counts_monthly$youth_related_crashes +
-  cameras_monthly_crashes$High_Youth_Census_Tract
+complete_crash_counts$Safety_Zone_Score <- complete_crash_counts$total_crashes +
+  complete_crash_counts$serious_fatal_crashes +
+  complete_crash_counts$bike_ped_crashes +
+  2 * complete_crash_counts$speed_related_crashes +
+  2 * complete_crash_counts$youth_related_crashes +
+  complete_crash_counts$high_youth_census
 
-cols <- c(
-  names(cameras_monthly_crashes)[1:9],
-  "High_Youth_Census_Tract",
-  "Safety_Zone_Score",
-  names(cameras_monthly_crashes)[10:(ncol(cameras_monthly_crashes)-2)]
-)
-cameras_monthly_crashes <- cameras_monthly_crashes[, cols]
+# Reorder columns
+complete_crash_counts <- complete_crash_counts %>%
+  select(Name, Zip_Code, crash_year, crash_month, total_crashes, serious_fatal_crashes, bike_ped_crashes, speed_related_crashes, youth_related_crashes, high_youth_census,Safety_Zone_Score, everything())
 
 
-# Print the updated data frame
-print(df)
+
+
+
+
+
+#-------------- perform ATT calc
+#-------------- perform ATT calculation
+
+# Ensure GO.LIVE.DATE is properly converted
+complete_crash_counts$GO.LIVE.DATE <- as.Date(complete_crash_counts$GO.LIVE.DATE, format = "%m/%d/%Y")
+
+# Specify a cutoff date
+cutoff_date <- as.Date("2022-01-01")
+
+# Create treatment and control groups based on GO.LIVE.DATE and cutoff_date
+complete_crash_counts <- complete_crash_counts %>%
+  mutate(
+    treatment_group = case_when(
+      is.na(GO.LIVE.DATE) ~ 0,                      # Control: No camera installed (NA in GO.LIVE.DATE)
+      GO.LIVE.DATE > cutoff_date ~ 1,               # Treatment: Camera installed after the cutoff date
+      TRUE ~ NA_real_                                # Exclude cases where the camera was installed before cutoff
+    ),
+    period = ifelse(crash_date < cutoff_date, "pre", "post")
+  ) %>%
+  filter(!is.na(treatment_group))  # Exclude zones with cameras installed before the cutoff date
+
+# Aggregate crashes (sum pre and post crash counts by zone and treatment group)
+aggregated_crashes_wide <- complete_crash_counts %>%
+  group_by(Name, treatment_group) %>%
+  summarise(
+    total_crashes_post = sum(total_crashes[period == "post"], na.rm = TRUE),
+    total_crashes_pre = sum(total_crashes[period == "pre"], na.rm = TRUE),
+    crash_difference = total_crashes_post - total_crashes_pre,
+    .groups = 'drop'
+  )
+
+# Estimate the counterfactual crashes for treated zones
+# Aggregate crashes for control units (without cameras)
+control_crashes <- aggregated_crashes_wide %>%
+  filter(treatment_group == 0) %>%
+  summarise(
+    control_total_crashes_post = mean(total_crashes_post, na.rm = TRUE),
+    control_total_crashes_pre = mean(total_crashes_pre, na.rm = TRUE)
+  )
+
+# Apply control crash rates to treated zones to estimate counterfactual
+treated_crashes_with_counterfactual <- aggregated_crashes_wide %>%
+  filter(treatment_group == 1) %>%
+  mutate(
+    counterfactual_crashes_post = control_crashes$control_total_crashes_post,
+    counterfactual_crashes_pre = control_crashes$control_total_crashes_pre
+  ) %>%
+  mutate(
+    counterfactual_difference = counterfactual_crashes_post - counterfactual_crashes_pre
+  )
+
+# Calculate ATT
+att_results <- treated_crashes_with_counterfactual %>%
+  summarise(
+    observed_crash_difference = mean(crash_difference, na.rm = TRUE),
+    average_counterfactual_difference = mean(counterfactual_difference, na.rm = TRUE)
+  ) %>%
+  mutate(
+    ATT = observed_crash_difference - average_counterfactual_difference
+  )
+
+# Print ATT result
+print("ATT Results:")
+print(att_results)
+
+
+
+
+# Count the number of unique zones in the treated group
+number_of_treated_zones <- complete_crash_counts %>%
+  filter(treatment_group == 1) %>%
+  summarise(number_of_zones = n_distinct(Name))
+
+print(number_of_treated_zones)
+
+duplicates <- complete_crash_counts %>%
+  group_by(Name, crash_year, crash_month) %>%
+  filter(n() > 1)
+
+print(duplicates)
+
+#----------- Estimate ATE: Hypothetical models
+
+# Create a hypothetical world where all zones have cameras
+hypothetical_all_cameras <- complete_crash_counts %>%
+  mutate(treatment_group = 1)
+
+# Create a hypothetical world where no zones have cameras
+hypothetical_no_cameras <- complete_crash_counts %>%
+  mutate(treatment_group = 0)
+
+# Aggregate crashes for hypothetical worlds
+agg_all_cameras <- hypothetical_all_cameras %>%
+  group_by(Name) %>%  # Aggregate across all zones
+  summarise(
+    total_crashes_post = sum(total_crashes[period == "post"], na.rm = TRUE),
+    total_crashes_pre = sum(total_crashes[period == "pre"], na.rm = TRUE),
+    crash_difference = total_crashes_post - total_crashes_pre,
+    .groups = 'drop'
+  ) %>%
+  summarise(
+    average_crash_difference = mean(crash_difference, na.rm = TRUE)
+  )
+
+agg_no_cameras <- hypothetical_no_cameras %>%
+  group_by(Name) %>%  # Aggregate across all zones
+  summarise(
+    total_crashes_post = sum(total_crashes[period == "post"], na.rm = TRUE),
+    total_crashes_pre = sum(total_crashes[period == "pre"], na.rm = TRUE),
+    crash_difference = total_crashes_post - total_crashes_pre,
+    .groups = 'drop'
+  ) %>%
+  summarise(
+    average_crash_difference = mean(crash_difference, na.rm = TRUE)
+  )
+
+# Calculate and print ATE
+ATE <- agg_all_cameras$average_crash_difference - agg_no_cameras$average_crash_difference
+print(paste("Estimated ATE:", ATE))
+
 
 
