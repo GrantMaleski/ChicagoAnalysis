@@ -1,5 +1,5 @@
 # Load required packages
-install.packages(c("tidygeocoder", "geosphere", "sf", "tigris","tidygeocoder", "lubridate"))
+install.packages(c("tidygeocoder", "geosphere", "sf", "tigris","tidygeocoder", "lubridate","tidyverse","MatchIt"))
 library(tidygeocoder)
 library(geosphere)
 library(sf)
@@ -7,25 +7,120 @@ library(ggplot2)
 library(tigris)
 library(lubridate)
 library(dplyr)
-library(tidyverse)
 library(tidygeocoder)
+library(tidyverse)
+library(MatchIt)
 
 
 
 # Load data
-crashes <- read.csv('/Users/grantmaleski/Downloads/Traffic_Crashes_-_Crashes_20240408.csv')
-cameras <- read.csv('/Users/grantmaleski/Downloads/Speed_Camera_Locations_20240408.csv')
-chicago_safety_zones <- read.csv('/Users/grantmaleski/Downloads/chicago_safety_areas.csv')
-chicago_map <- read_sf("/Users/grantmaleski/Downloads/WARDS_2015")
-people <- read.csv('/Users/grantmaleski/Downloads/Traffic_Crashes_-_People.csv')
-census_information <- read_csv("/Users/grantmaleski/Downloads/Chicago_Population_Counts_20240907.csv")
+crashes <- read.csv('/Users/grant.maleski/Downloads/Traffic_Crashes_-_Crashes_20240927.csv')
+cameras <- read.csv('/Users/grant.maleski/Downloads/Speed_Camera_Locations_20240408.csv')
+chicago_safety_zones <- read.csv('/Users/grant.maleski/Downloads/chicago_safety_areas.csv')
+chicago_map <- read_sf("/Users/grant.maleski/Downloads/WARDS_2015")
+people <- read.csv('/Users/grant.maleski/Downloads/Traffic_Crashes_-_People_20240927.csv')
+census_information <- read.csv("/Users/grant.maleski/Downloads/Chicago_Population_Counts_20240927.csv", check.names = FALSE)
+
+duplicate_address <- chicago_safety_zones$Address[duplicated(chicago_safety_zones$Address)]
+length(unique(duplicate_address))
 
 
 
-# Clean and preprocess data
-## Some of the addresses aren't formatted properly for API call - Fix addresses
-chicago_safety_zones[367,3] <- '3000 S Martin Luther King Dr'
-chicago_safety_zones[1402,3] <- '7001 West 59th St'
+
+
+# Keep only one occurrence of duplicated addresses
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Antonia Pantoja HS" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Edgebrook" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Hale" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Orozco" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Pasteur" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Rogers" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Skinner" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "White" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Wildwood" & duplicated(chicago_safety_zones$Name)), ]
+chicago_safety_zones <- chicago_safety_zones[!(chicago_safety_zones$Name == "Williams" & duplicated(chicago_safety_zones$Name)), ]
+
+
+
+#Rename zones with the same name
+chicago_safety_zones[chicago_safety_zones$Address == "7535 S Dobson Ave" & chicago_safety_zones$Name == "Adams", "Name"] <- "Grand Crossing Park"
+chicago_safety_zones[chicago_safety_zones$Address == "10810 S Ave H" & chicago_safety_zones$Name == "Addams", "Name"] <-"Jane Addams Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "1340 W 71St St" & chicago_safety_zones$Name == "Altgeld", "Name"] <-"Wentworth Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "950 W 33rd Pl" & chicago_safety_zones$Name == "Armour", "Name"] <-"Armour Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "2945 N Sawyer Ave" & chicago_safety_zones$Name == "Avondale", "Name"] <-"Avondale Public School"
+chicago_safety_zones[chicago_safety_zones$Address == "10354 S Charles St" & chicago_safety_zones$Name == "Barnard", "Name"] <-"Alice L . Barnard Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "3730 N Oakley Ave" & chicago_safety_zones$Name == "Bell", "Name"] <-"Alexander Graham Bell School"
+chicago_safety_zones[chicago_safety_zones$Address == "4542 S Greenwood Ave" & chicago_safety_zones$Name == "Brooks", "Name"] <-"Brooks (Gwendolyn) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5522 N Milwaukee Ave" & chicago_safety_zones$Name == "Care A Lot" , "Name"] <-"Care-A-Lot Early Learning Center"
+chicago_safety_zones[chicago_safety_zones$Address == "1250 W Erie St" & chicago_safety_zones$Name == "Carpenter" , "Name"] <-"Ogden International High School"
+chicago_safety_zones[chicago_safety_zones$Address == "2021 N Point St" & chicago_safety_zones$Name == "Chase" , "Name"] <-"Salmon P Chase Public School"
+chicago_safety_zones[chicago_safety_zones$Address == "212 S Francisco Ave" & chicago_safety_zones$Name == "Chicago Jesuit Acad" , "Name"] <-"Marillac St. Vincent (East Garfield Park)"
+chicago_safety_zones[chicago_safety_zones$Address == "2450 W Rice St" & chicago_safety_zones$Name == "Chopin" , "Name"] <-"Frederic Chopin Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "3400 N Rockwell Ave" & chicago_safety_zones$Name == "Clark" , "Name"] <-"Clark (Richard) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "1045 S Monitor Ave" & chicago_safety_zones$Name == "Clark" , "Name"] <-"G R Clark Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "1003 N Leavitt St" & chicago_safety_zones$Name == "Columbus" , "Name"] <-"Christopher Columbus School"
+chicago_safety_zones[chicago_safety_zones$Address == "1624 W 19th St" & chicago_safety_zones$Name == "Cooper" , "Name"] <-"Peter Cooper Public School"
+chicago_safety_zones[chicago_safety_zones$Address == "1809 W 50th St" & chicago_safety_zones$Name == "Cornell" , "Name"] <-"Cornell (Paul) Square Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5427 W Division St" & chicago_safety_zones$Name == "Davis" , "Name"] <-"Davis (Margaret) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "3810 W 81St Pl" & chicago_safety_zones$Name == "Dawes" , "Name"] <-"Dawes Elementary Scool"
+chicago_safety_zones[chicago_safety_zones$Address == "1550 S State St" & chicago_safety_zones$Name == "Daystar School" , "Name"] <-"Daystar Academy"
+chicago_safety_zones[chicago_safety_zones$Address == "8306 S St Lawrence Ave" & chicago_safety_zones$Name == "Dixon" , "Name"] <-"Dixon Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "6755 N Northwest Hwy" & chicago_safety_zones$Name == "Edison" , "Name"] <-"Edison (Thomas Alva) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "3537 S Paulina St" & chicago_safety_zones$Name == "Evergreen" , "Name"] <-"Evergreen Academy Middle School"
+chicago_safety_zones[chicago_safety_zones$Address == "10041 S Union Ave" & chicago_safety_zones$Name == "Fernwood" , "Name"] <-"Fernwood Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "7019 N Ashland Bl" & chicago_safety_zones$Name == "Field" , "Name"] <-"Eugene Field Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "331 W 45th St" & chicago_safety_zones$Name == "Fuller" , "Name"] <-"Fuller (Melville) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5421 N Menard Ave" & chicago_safety_zones$Name == "Gladstone" , "Name"] <-"Gladstone (William) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "4222 W Foster Ave" & chicago_safety_zones$Name == "Gompers" , "Name"] <-"Gompers (Samuel) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5120 N Winthrop Ave" & chicago_safety_zones$Name == "Goudy" , "Name"] <-"William C Goudy Public School"
+chicago_safety_zones[chicago_safety_zones$Address == "1650 W Cornelia Ave" & chicago_safety_zones$Name == "Hamilton" , "Name"] <-"Hamilton Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "6200 S Drexel Ave" & chicago_safety_zones$Name == "Harris" , "Name"] <-"Harris (Harriet) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "3417 S Hamilton Ave" & chicago_safety_zones$Name == "Hoyne" , "Name"] <-"Hoyne (Thomas) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "3849 W 69th Pl" & chicago_safety_zones$Name == "Hurley" , "Name"] <-"Hurley Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "1431 N Park Ave" & chicago_safety_zones$Name == "Immaculate Conception" , "Name"] <-"Immaculate Conception Catholic Church (ICSJ Parish)"
+chicago_safety_zones[chicago_safety_zones$Address == "8385 S Birkhoff Ave" & chicago_safety_zones$Name == "Jackson" , "Name"] <-"Jackson (Mahalia) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "4822 N Long Ave" & chicago_safety_zones$Name == "Jefferson" , "Name"] <-"Jefferson (Thomas) Memorial Park"
+chicago_safety_zones[chicago_safety_zones$Address == "1640 S Jefferson St" & chicago_safety_zones$Name == "Jefferson" , "Name"] <-"Jefferson Park Playground"
+chicago_safety_zones[chicago_safety_zones$Address == "5036 S Blackstone Ave" & chicago_safety_zones$Name == "Just For Kids" , "Name"] <-"Kenwood Academy High School"
+chicago_safety_zones[chicago_safety_zones$Address == "2725 W 41St St" & chicago_safety_zones$Name == "Kelly" , "Name"] <-"Kelly (Edward) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "1212 W 77th St" & chicago_safety_zones$Name == "King" , "Name"] <-"Dr. Martin Luther King, Jr. Park"
+chicago_safety_zones[chicago_safety_zones$Address == "6448 S Tripp Ave" & chicago_safety_zones$Name == "Lee" , "Name"] <-"Richard Henry Lee Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "8050 S Chappel Ave" & chicago_safety_zones$Name == "Mann" , "Name"] <-"Horace Mann School"
+chicago_safety_zones[chicago_safety_zones$Address == "4100 W West End Ave" & chicago_safety_zones$Name == "Mason" , "Name"] <-"Mason (Elizabeth) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "11710 S Morgan St" & chicago_safety_zones$Name == "Morgan" , "Name"] <-"Morgan Field Park"
+chicago_safety_zones[chicago_safety_zones$Address == "2036 N Avers Ave" & chicago_safety_zones$Name == "Mozart" , "Name"] <-"Mozart (Amadeus) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "4837 W Erie St" & chicago_safety_zones$Name == "Nash" , "Name"] <-"Nash Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "429 N Columbus Dr" & chicago_safety_zones$Name == "Ogden" , "Name"] <-"Ogden Plaza Park"
+chicago_safety_zones[chicago_safety_zones$Address == "200 E 111th St" & chicago_safety_zones$Name == "Palmer" , "Name"] <-"Palmer Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5510 N Christiana Ave" & chicago_safety_zones$Name == "Peterson" , "Name"] <-"Peterson Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "11311 S Forrestville Ave" & chicago_safety_zones$Name == "Pullman" , "Name"] <-"Pullman Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "2509 W Irving Park Rd" & chicago_safety_zones$Name == "Revere" , "Name"] <-"Revere (Paul) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "4225 S Lake Park Ave" & chicago_safety_zones$Name == "Robinson" , "Name"] <-"Jackie Robinson Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "6250 N Sheridan Rd" & chicago_safety_zones$Name == "Sacred Heart School" , "Name"] <-"Sacred Heart School- Sheridan"
+chicago_safety_zones[chicago_safety_zones$Address == "6040 N Kilpatrick Ave" & chicago_safety_zones$Name == "Sauganash" , "Name"] <-"Sauganash Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "4600 S Hermitage Ave" & chicago_safety_zones$Name == "Seward" , "Name"] <-"William H. Seward Communication Arts Academy Elementary School"
+chicago_safety_zones[chicago_safety_zones$Address == "1307 W 52nd St" & chicago_safety_zones$Name == "Sherman" , "Name"] <-"Sherman Park"
+chicago_safety_zones[chicago_safety_zones$Address == "245 W 57th St" & chicago_safety_zones$Name == "Sherwood" , "Name"] <-"Sherwood (Jesse) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "1443 N. Ogden Ave" & chicago_safety_zones$Name == "Skinner" , "Name"] <-"Skinner (Mark) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "744 E 103rd St" & chicago_safety_zones$Name == "Smith" , "Name"] <-"Wendell Smith School"
+chicago_safety_zones[chicago_safety_zones$Address == "9912 S Princeton Ave" & chicago_safety_zones$Name == "Smith" , "Name"] <-"Smith (Wendell) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "2526 W Grand Ave" & chicago_safety_zones$Name == "Smith" , "Name"] <-"Smith (Joseph Higgins) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "100 W 47th St" & chicago_safety_zones$Name == "Taylor" , "Name"] <-"Robert Taylor Park"
+chicago_safety_zones[chicago_safety_zones$Address == "223 N Keeler Ave" & chicago_safety_zones$Name == "Tilton" , "Name"] <-"George W Tilton Public School"
+chicago_safety_zones[chicago_safety_zones$Address == "2400 E 105th St" & chicago_safety_zones$Name == "Trumbull" , "Name"] <-"Trumbull (Lyman) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "2031 S Peoria St" & chicago_safety_zones$Name == "Walsh" , "Name"] <-"John A Walsh Public School"
+chicago_safety_zones[chicago_safety_zones$Address == "6621 N Western Ave" & chicago_safety_zones$Name == "Warren" , "Name"] <-"Warren (Laurence) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5531 S MLK Jr. Dr" & chicago_safety_zones$Name == "Washington" , "Name"] <-"Washington (George) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "5625 S Mobile Ave" & chicago_safety_zones$Name == "Wentworth" , "Name"] <-"Wentworth (John) Park"
+
+chicago_safety_zones[chicago_safety_zones$Address == "8215 S Euclid Ave" & chicago_safety_zones$Name == "Washington" , "Name"] <-"Washington (Dinah) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "3770 S Wentworth Ave" & chicago_safety_zones$Name == "Wentworth" , "Name"] <-"Wentworth Gardens (John) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "400 W 123rd St" & chicago_safety_zones$Name == "West Pullman" , "Name"] <-"West Pullman Park"
+chicago_safety_zones[chicago_safety_zones$Address == "4630 N Milwaukee Ave" & chicago_safety_zones$Name == "Wilson" , "Name"] <-"Wilson (Frank J.) Park"
+chicago_safety_zones[chicago_safety_zones$Address == "1122 W 34th Pl" & chicago_safety_zones$Name == "Wilson" , "Name"] <-"Wilson (John P.) Park"
+
+
+
 
 ## Geocode addresses via Google Maps API
 addresses <- chicago_safety_zones$Address
@@ -233,7 +328,7 @@ safety_zones_with_cameras <- chicago_safety_zones_list_sf %>%
 
 # Replace NA with "N/A" for camera-related columns
 safety_zones_with_cameras <- safety_zones_with_cameras %>%
-  mutate(across(c(camera_id, GO.LIVE.DATE, LOCATION.ID), ~ifelse(is.na(.), "N/A", as.character(.))))
+  mutate(across(c(camera_id, GO.LIVE.DATE, LOCATION.ID), ~ifelse(is.na(.), NA, as.character(.))))
 
 
 
@@ -277,7 +372,7 @@ crashes_with_counts <- crashes_in_buffer_filtered %>%
   left_join(crash_counts_by_zone, by = "Name") %>%
   mutate(crash_count = ifelse(is.na(crash_count), 0, crash_count)) %>%  # Handle NA values for crash count
   left_join(camera_data, by = "Name") %>%  # Join camera data
-  mutate(go_live_date = ifelse(is.na(go_live_date), "N/A", go_live_date))  # Handle NA values for go_live_date
+  mutate(go_live_date = ifelse(is.na(go_live_date), NA, go_live_date))  # Handle NA values for go_live_date
 
 
 
@@ -344,14 +439,26 @@ complete_crash_counts <- complete_zones_monthly %>%
 
 
 
+duplicate_names <- safety_zones_with_cameras %>%
+  group_by(Name) %>%
+  filter(n() > 1) %>%
+  ungroup()
 
+# Create a formatted table of duplicates
+duplicate_table <- duplicate_names %>%
+  select(Name, Address, Zip_Code, camera_id, GO.LIVE.DATE, LOCATION.ID) %>%
+  arrange(Name)
+
+safety_zones_with_cameras_unique <- safety_zones_with_cameras %>%
+  group_by(Name) %>%
+  slice(1) %>%  # Keep the first occurrence of each Name
+  ungroup()
 
 
 complete_crash_counts <- complete_crash_counts %>%
-  left_join(safety_zones_with_cameras %>% 
+  left_join(safety_zones_with_cameras_unique %>% 
               select(Name, Zip_Code, GO.LIVE.DATE), 
-            by = c("Name"), 
-            relationship = "one-to-one")
+            by = c("Name"))
 
 
 #see if safety zones are high census or not
@@ -401,28 +508,48 @@ complete_crash_counts <- complete_crash_counts %>%
 
 
 
+#----------Compare treated zones with not treated zones for similar sample size and sfzone score
 
 
-#-------------- perform ATT calc
+# Get the unique zones (total number of unique zones in the dataset)
+zones <- unique(complete_crash_counts$Name)
+
+# Get the unique treated zones (zones with cameras, i.e., non-null GO.LIVE.DATE)
+treated_zones <- unique(complete_crash_counts$Name[!is.na(complete_crash_counts$GO.LIVE.DATE)])
+
+
+mean_treated_safety_zones <- complete_crash_counts %>%
+  filter(Name %in% treated_zones) %>%
+  group_by(crash_year) %>%
+  summarize(mean_safety_zones = mean(Safety_Zone_Score, na.rm = TRUE))  # Using the correct column name
+
+# View results
+print(mean_treated_safety_zones)
+
+
+
 #-------------- perform ATT calculation
-
 # Ensure GO.LIVE.DATE is properly converted
 complete_crash_counts$GO.LIVE.DATE <- as.Date(complete_crash_counts$GO.LIVE.DATE, format = "%m/%d/%Y")
 
-# Specify a cutoff date
-cutoff_date <- as.Date("2022-01-01")
 
-# Create treatment and control groups based on GO.LIVE.DATE and cutoff_date
+# Create treatment and control groups based on GO.LIVE.DATE
 complete_crash_counts <- complete_crash_counts %>%
   mutate(
+    # Assign treatment group based on the availability of GO.LIVE.DATE and its comparison to crash_date
     treatment_group = case_when(
-      is.na(GO.LIVE.DATE) ~ 0,                      # Control: No camera installed (NA in GO.LIVE.DATE)
-      GO.LIVE.DATE > cutoff_date ~ 1,               # Treatment: Camera installed after the cutoff date
-      TRUE ~ NA_real_                                # Exclude cases where the camera was installed before cutoff
+      is.na(GO.LIVE.DATE) ~ 0,                       # Control: No camera installed (NA in GO.LIVE.DATE)
+      crash_date < GO.LIVE.DATE ~ 0,                 # Control: Crash occurred before camera installation
+      crash_date >= GO.LIVE.DATE ~ 1                  # Treatment: Crash occurred after camera installation
     ),
-    period = ifelse(crash_date < cutoff_date, "pre", "post")
+    # Define the period based on crash_date relative to GO.LIVE.DATE
+    period = case_when(
+      crash_date < GO.LIVE.DATE ~ "pre",             # Pre-treatment if crash occurred before camera installation
+      crash_date >= GO.LIVE.DATE ~ "post",           # Post-treatment if crash occurred on or after camera installation
+      TRUE ~ NA_character_                            # Exclude cases not fitting the criteria
+    )
   ) %>%
-  filter(!is.na(treatment_group))  # Exclude zones with cameras installed before the cutoff date
+  filter(!is.na(period))  # Exclude any rows that don't fit into pre or post categories
 
 # Aggregate crashes (sum pre and post crash counts by zone and treatment group)
 aggregated_crashes_wide <- complete_crash_counts %>%
@@ -468,9 +595,6 @@ att_results <- treated_crashes_with_counterfactual %>%
 print("ATT Results:")
 print(att_results)
 
-
-
-
 # Count the number of unique zones in the treated group
 number_of_treated_zones <- complete_crash_counts %>%
   filter(treatment_group == 1) %>%
@@ -478,21 +602,65 @@ number_of_treated_zones <- complete_crash_counts %>%
 
 print(number_of_treated_zones)
 
-duplicates <- complete_crash_counts %>%
-  group_by(Name, crash_year, crash_month) %>%
-  filter(n() > 1)
 
-print(duplicates)
+#----------ATT controlled for SFzone score by matching
+
+
+# Perform nearest neighbor matching
+match_model <- matchit(treatment_group ~ Safety_Zone_Score, data = complete_crash_counts, method = "nearest")
+
+# Get matched data
+matched_data <- match.data(match_model)
+
+# Now you can analyze the matched data
+matched_results <- matched_data %>%
+  group_by(treatment_group) %>%
+  summarise(
+    average_crashes = mean(total_crashes, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+print(matched_results)
+
+treatment_effect <- matched_results$average_crashes[2] - matched_results$average_crashes[1]
+print(paste("Treatment Effect:", treatment_effect))
+
+
+#---------------ATT controlled by stratisfication
+
+# Define quantiles to create strata based on Safety Zone Score
+complete_crash_counts <- complete_crash_counts %>%
+  mutate(score_strata = ntile(Safety_Zone_Score, 3))  # Creates 3 strata (low, medium, high)
+
+# Now you can run your analysis within each stratum
+stratified_results <- complete_crash_counts %>%
+  group_by(score_strata) %>%
+  summarise(
+    observed_crash_difference = mean(total_crashes[treatment_group == 1], na.rm = TRUE) - 
+      mean(total_crashes[treatment_group == 0], na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+print(stratified_results)
+
 
 #----------- Estimate ATE: Hypothetical models
+# Use the ATT value from att_results
+ATT_value <- att_results$ATT  # Extract the ATT value
 
 # Create a hypothetical world where all zones have cameras
 hypothetical_all_cameras <- complete_crash_counts %>%
-  mutate(treatment_group = 1)
+  mutate(
+    total_crashes = total_crashes + ATT_value,  # Adjust crashes by ATT value for treated group
+    treatment_group = 1
+  )
 
 # Create a hypothetical world where no zones have cameras
 hypothetical_no_cameras <- complete_crash_counts %>%
-  mutate(treatment_group = 0)
+  mutate(
+    total_crashes = total_crashes,  # No adjustment for control group
+    treatment_group = 0
+  )
 
 # Aggregate crashes for hypothetical worlds
 agg_all_cameras <- hypothetical_all_cameras %>%
@@ -522,6 +690,7 @@ agg_no_cameras <- hypothetical_no_cameras %>%
 # Calculate and print ATE
 ATE <- agg_all_cameras$average_crash_difference - agg_no_cameras$average_crash_difference
 print(paste("Estimated ATE:", ATE))
+
 
 
 
