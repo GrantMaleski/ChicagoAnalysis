@@ -212,9 +212,6 @@ camera_location_list <- data.frame(Latitude = cameras$LATITUDE,
 
 
 
-
-
-
 # Set up our safety zone and crash locations lists to be geospatially analyzed
 ## Set up CRS
 crs <- st_crs("+proj=longlat +datum=WGS84")
@@ -244,6 +241,7 @@ chicago_safety_zones_list_sf <- st_as_sf(chicago_safety_zones_list_filtered,
 #start calculating distances of each crash to nearest sf zone and camera
 
 ## Calculate nearest neighbors and distances
+
 ### For cameras
 nearest_indices_camera <- st_nearest_feature(crash_location_sf, camera_location_list_sf)
 nearest_neighbors_camera <- camera_location_list_sf[nearest_indices_camera, ]
@@ -287,12 +285,12 @@ crashes_clean <- crashes_clean %>%
 
 
 
-## Count cameras by year to help us determine a before and after date for Avg Affect of Treatment
+##Count cameras by year to help us determine a before and after date for Avg Affect of Treatment
 cameras_year_counts <- table(cameras$year)
 print(cameras_year_counts)
 
 ## Count crashes by year
-crashes_year_counts <- table(crashes_clean$year)
+crashes_year_counts <- table(crashes_clean$crash_year)
 print(crashes_year_counts)
 
 
@@ -334,13 +332,6 @@ safety_zones_with_cameras <- safety_zones_with_cameras %>%
 
 
 
-
-
-
-
-
-
-
 # Create spatial objects for analysis
 safety_zones_sf <- st_as_sf(safety_zones_with_cameras, coords = c("Longitude", "Latitude"), crs = 4326)
 safety_zones_sf$orig_lon <- st_coordinates(safety_zones_sf)[,1]
@@ -349,7 +340,7 @@ safety_zones_buffer <- st_buffer(safety_zones_sf, dist = 201)
 
 
 
-# Perform spatial analysis
+# Perform spatial analysis to see how many crasehs in safety zone
 crashes_in_buffer <- st_join(crashes_sf, safety_zones_buffer)
 
 # Filter out crashes with missing or blank zone names
@@ -415,7 +406,13 @@ start_year <- min(crashes$crash_year)
 end_year <- max(crashes$crash_year)
 
 
-unique_zones <- unique(safety_zones_with_cameras$Name)
+safety_zones_with_cameras <- safety_zones_with_cameras %>%
+  mutate(GO.LIVE.DATE = as.Date(GO.LIVE.DATE))  # Ensure GO.LIVE.DATE is in Date format
+
+# Now filter for treated zones with GO.LIVE.DATE after 2018 or NA
+unique_zones <- unique(safety_zones_with_cameras %>%
+                         filter(is.na(GO.LIVE.DATE) | GO.LIVE.DATE >= as.Date("2018-01-01")) %>%
+                         .$Name)  # Extract the 'Name' column after filtering
 
 # Create a dataframe with all combinations of zones and dates, including crash_date
 complete_zones_monthly <- expand_grid(
@@ -439,15 +436,6 @@ complete_crash_counts <- complete_zones_monthly %>%
 
 
 
-duplicate_names <- safety_zones_with_cameras %>%
-  group_by(Name) %>%
-  filter(n() > 1) %>%
-  ungroup()
-
-# Create a formatted table of duplicates
-duplicate_table <- duplicate_names %>%
-  select(Name, Address, Zip_Code, camera_id, GO.LIVE.DATE, LOCATION.ID) %>%
-  arrange(Name)
 
 safety_zones_with_cameras_unique <- safety_zones_with_cameras %>%
   group_by(Name) %>%
@@ -508,26 +496,6 @@ complete_crash_counts <- complete_crash_counts %>%
 
 
 
-#----------Compare treated zones with not treated zones for similar sample size and sfzone score
-
-
-# Get the unique zones (total number of unique zones in the dataset)
-zones <- unique(complete_crash_counts$Name)
-
-# Get the unique treated zones (zones with cameras, i.e., non-null GO.LIVE.DATE)
-treated_zones <- unique(complete_crash_counts$Name[!is.na(complete_crash_counts$GO.LIVE.DATE)])
-
-
-mean_treated_safety_zones <- complete_crash_counts %>%
-  filter(Name %in% treated_zones) %>%
-  group_by(crash_year) %>%
-  summarize(mean_safety_zones = mean(Safety_Zone_Score, na.rm = TRUE))  # Using the correct column name
-
-# View results
-print(mean_treated_safety_zones)
-
-
-
 #-------------- perform ATT calculation
 # Ensure GO.LIVE.DATE is properly converted
 complete_crash_counts$GO.LIVE.DATE <- as.Date(complete_crash_counts$GO.LIVE.DATE, format = "%m/%d/%Y")
@@ -538,18 +506,20 @@ complete_crash_counts <- complete_crash_counts %>%
   mutate(
     # Assign treatment group based on the availability of GO.LIVE.DATE and its comparison to crash_date
     treatment_group = case_when(
-      is.na(GO.LIVE.DATE) ~ 0,                       # Control: No camera installed (NA in GO.LIVE.DATE)
-      crash_date < GO.LIVE.DATE ~ 0,                 # Control: Crash occurred before camera installation
-      crash_date >= GO.LIVE.DATE ~ 1                  # Treatment: Crash occurred after camera installation
+      is.na(GO.LIVE.DATE) ~ 0,  # Control: No camera installed (NA in GO.LIVE.DATE)
+      !is.na(GO.LIVE.DATE) & crash_date < GO.LIVE.DATE ~ 0,  # Control: Crash occurred before camera installation
+      !is.na(GO.LIVE.DATE) & crash_date >= GO.LIVE.DATE ~ 1  # Treatment: Crash occurred after camera installation
     ),
     # Define the period based on crash_date relative to GO.LIVE.DATE
     period = case_when(
-      crash_date < GO.LIVE.DATE ~ "pre",             # Pre-treatment if crash occurred before camera installation
-      crash_date >= GO.LIVE.DATE ~ "post",           # Post-treatment if crash occurred on or after camera installation
-      TRUE ~ NA_character_                            # Exclude cases not fitting the criteria
+      is.na(GO.LIVE.DATE) ~ "control",              # Control: No camera installed
+      crash_date < GO.LIVE.DATE ~ "pre",            # Pre-treatment if crash occurred before camera installation
+      crash_date >= GO.LIVE.DATE ~ "post",          # Post-treatment if crash occurred on or after camera installation
+      TRUE ~ NA_character_                          # Exclude cases not fitting the criteria
     )
   ) %>%
   filter(!is.na(period))  # Exclude any rows that don't fit into pre or post categories
+
 
 # Aggregate crashes (sum pre and post crash counts by zone and treatment group)
 aggregated_crashes_wide <- complete_crash_counts %>%
@@ -694,3 +664,99 @@ print(paste("Estimated ATE:", ATE))
 
 
 
+
+
+
+
+
+
+
+#-----------------See crash totals pre and post treatment for each zone
+
+# Create new columns to define the 3-year pre- and post-treatment windows
+segmented_complete_crash_counts <- complete_crash_counts %>%
+  mutate(
+    pre_treatment_start = GO.LIVE.DATE - years(3),  # Start date for the pre-treatment period (3 years before GO.LIVE.DATE)
+    post_treatment_end = GO.LIVE.DATE + years(3),   # End date for the post-treatment period (3 years after GO.LIVE.DATE)
+    within_pre_treatment = ifelse(crash_date >= pre_treatment_start & crash_date < GO.LIVE.DATE, 1, 0),  # 1 if crash is within 3 years before treatment
+    within_post_treatment = ifelse(crash_date > GO.LIVE.DATE & crash_date <= post_treatment_end, 1, 0)   # 1 if crash is within 3 years after treatment
+  )
+
+# Aggregate crashes by zone for the pre- and post-treatment periods
+zone_crash_summary <- segmented_complete_crash_counts %>%
+  group_by(Name) %>%
+  summarise(
+    crashes_pre_treatment = sum(within_pre_treatment, na.rm = TRUE),  # Total crashes in the 3 years before GO.LIVE.DATE
+    crashes_post_treatment = sum(within_post_treatment, na.rm = TRUE) # Total crashes in the 3 years after GO.LIVE.DATE
+  )
+
+# View the summary for each zone
+print(zone_crash_summary)
+
+
+
+
+
+
+
+
+
+
+
+#----see how many total crashes happened in zones compared to outside zones
+# Calculate the proportion of unique crashes in buffer compared to total unique crashes
+proportion_of_crashes <- n_distinct(crashes_in_buffer_filtered$CRASH_RECORD_ID) / n_distinct(crashes$CRASH_RECORD_ID)
+
+# View the result
+print(proportion_of_crashes)
+
+#
+
+#----------Compare treated zones with not treated zones for similar sample size and sfzone score
+
+
+# Step 1: Get the treated and untreated zones
+# Get the unique untreated zones (zones with no cameras, i.e., NA in GO.LIVE.DATE)
+untreated_zones <- unique(complete_crash_counts$Name[is.na(complete_crash_counts$GO.LIVE.DATE)])
+
+# Filter the untreated zones and select the top 106 based on Safety_Zone_Score
+top_untreated_zones <- complete_crash_counts %>%
+  filter(Name %in% untreated_zones) %>%
+  group_by(Name) %>%
+  summarize(
+    mean_safety_zone_score = mean(Safety_Zone_Score, na.rm = TRUE),
+    GO_LIVE_DATE = first(GO.LIVE.DATE)  # This will be NA for untreated zones
+  ) %>%
+  arrange(desc(mean_safety_zone_score)) %>%
+  top_n(106, mean_safety_zone_score)
+
+# Get the treated zones (zones with cameras, i.e., non-null GO.LIVE.DATE)
+top_treated_zones <- complete_crash_counts %>%
+  filter(!is.na(GO.LIVE.DATE)) %>%
+  group_by(Name) %>%
+  summarize(
+    mean_safety_zone_score = mean(Safety_Zone_Score, na.rm = TRUE),
+    GO_LIVE_DATE = first(GO.LIVE.DATE)  # This will contain the actual GO.LIVE.DATE for treated zones
+  )
+
+# Step 2: Combine treated and untreated zones into one dataframe
+# Add treatment group for matching purposes (1 for treated, 0 for untreated)
+combined_zones <- bind_rows(
+  mutate(top_untreated_zones, treatment_group = 0),  # Untreated zones
+  mutate(top_treated_zones, treatment_group = 1)    # Treated zones
+)
+
+# Step 3: Perform nearest neighbor matching based on safety zone score
+# We use 'treatment_group ~ mean_safety_zone_score' for matching
+matched_data <- matchit(treatment_group ~ mean_safety_zone_score, 
+                        data = combined_zones, 
+                        method = "nearest", 
+                        caliper = 0.1)
+
+# Step 4: Get the matched results
+matched_results <- match.data(matched_data)
+
+# Step 5: Inspect matched results
+str(matched_results)
+
+# You can now proceed with analyzing the matched zones
