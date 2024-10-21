@@ -390,7 +390,6 @@ crash_counts_monthly <- crashes_in_buffer_filtered %>%
   ungroup() %>%
   st_drop_geometry()
 
-crashes_sf$CRASH_DATE <- as.Date(crashes_sf$CRASH_DATE, format = "%Y-%m-%d")
 
 
 crash_counts_monthly <- crash_counts_monthly %>%
@@ -406,13 +405,16 @@ start_year <- min(crashes$crash_year)
 end_year <- max(crashes$crash_year)
 
 
-safety_zones_with_cameras <- safety_zones_with_cameras %>%
-  mutate(GO.LIVE.DATE = as.Date(GO.LIVE.DATE))  # Ensure GO.LIVE.DATE is in Date format
 
-# Now filter for treated zones with GO.LIVE.DATE after 2018 or NA
-unique_zones <- unique(safety_zones_with_cameras %>%
-                         filter(is.na(GO.LIVE.DATE) | GO.LIVE.DATE >= as.Date("2018-01-01")) %>%
-                         .$Name)  # Extract the 'Name' column after filtering
+# Convert the GO.LIVE.DATE column to Date format and filter for dates after 2018 or NA
+safety_zones_with_cameras <- safety_zones_with_cameras %>%
+  mutate(GO.LIVE.DATE = as.Date(GO.LIVE.DATE, format = "%m/%d/%Y")) %>%
+  filter(is.na(GO.LIVE.DATE) | GO.LIVE.DATE >= as.Date("2018-01-01"))
+
+# Ensure the filtering worked by checking the unique values
+unique_zones <- unique(safety_zones_with_cameras$Name)
+
+
 
 # Create a dataframe with all combinations of zones and dates, including crash_date
 complete_zones_monthly <- expand_grid(
@@ -497,8 +499,6 @@ complete_crash_counts <- complete_crash_counts %>%
 
 
 #-------------- perform ATT calculation
-# Ensure GO.LIVE.DATE is properly converted
-complete_crash_counts$GO.LIVE.DATE <- as.Date(complete_crash_counts$GO.LIVE.DATE, format = "%m/%d/%Y")
 
 
 # Create treatment and control groups based on GO.LIVE.DATE
@@ -576,11 +576,18 @@ print(number_of_treated_zones)
 #----------ATT controlled for SFzone score by matching
 
 
-# Perform nearest neighbor matching
-match_model <- matchit(treatment_group ~ Safety_Zone_Score, data = complete_crash_counts, method = "nearest")
+# Perform nearest neighbor matching with 1:1 matching and a caliper
+match_model <- matchit(treatment_group ~ Safety_Zone_Score, 
+                       data = complete_crash_counts, 
+                       method = "nearest", 
+                       ratio = 1,  # 1:1 matching (each treated unit matched to one control)
+                       caliper = 0.5)  # Caliper restricts matching to closer matches
 
 # Get matched data
 matched_data <- match.data(match_model)
+
+# Check the number of treated and untreated groups
+table(matched_data$treatment_group)
 
 # Now you can analyze the matched data
 matched_results <- matched_data %>%
@@ -589,11 +596,6 @@ matched_results <- matched_data %>%
     average_crashes = mean(total_crashes, na.rm = TRUE),
     .groups = 'drop'
   )
-
-print(matched_results)
-
-treatment_effect <- matched_results$average_crashes[2] - matched_results$average_crashes[1]
-print(paste("Treatment Effect:", treatment_effect))
 
 
 #---------------ATT controlled by stratisfication
@@ -676,8 +678,8 @@ print(paste("Estimated ATE:", ATE))
 # Create new columns to define the 3-year pre- and post-treatment windows
 segmented_complete_crash_counts <- complete_crash_counts %>%
   mutate(
-    pre_treatment_start = GO.LIVE.DATE - years(3),  # Start date for the pre-treatment period (3 years before GO.LIVE.DATE)
-    post_treatment_end = GO.LIVE.DATE + years(3),   # End date for the post-treatment period (3 years after GO.LIVE.DATE)
+    pre_treatment_start = GO.LIVE.DATE - years(2),  # Start date for the pre-treatment period (2 years before GO.LIVE.DATE)
+    post_treatment_end = GO.LIVE.DATE + years(2),   # End date for the post-treatment period (2 years after GO.LIVE.DATE)
     within_pre_treatment = ifelse(crash_date >= pre_treatment_start & crash_date < GO.LIVE.DATE, 1, 0),  # 1 if crash is within 3 years before treatment
     within_post_treatment = ifelse(crash_date > GO.LIVE.DATE & crash_date <= post_treatment_end, 1, 0)   # 1 if crash is within 3 years after treatment
   )
@@ -715,48 +717,102 @@ print(proportion_of_crashes)
 #----------Compare treated zones with not treated zones for similar sample size and sfzone score
 
 
+#----------Compare treated zones with not treated zones for similar sample size and sfzone score
+
+#----------Compare treated zones with not treated zones for similar sample size and sfzone score
+
 # Step 1: Get the treated and untreated zones
 # Get the unique untreated zones (zones with no cameras, i.e., NA in GO.LIVE.DATE)
-untreated_zones <- unique(complete_crash_counts$Name[is.na(complete_crash_counts$GO.LIVE.DATE)])
-
-# Filter the untreated zones and select the top 106 based on Safety_Zone_Score
-top_untreated_zones <- complete_crash_counts %>%
-  filter(Name %in% untreated_zones) %>%
+untreated_zones <- complete_crash_counts %>%
+  filter(is.na(GO.LIVE.DATE)) %>%
   group_by(Name) %>%
-  summarize(
-    mean_safety_zone_score = mean(Safety_Zone_Score, na.rm = TRUE),
-    GO_LIVE_DATE = first(GO.LIVE.DATE)  # This will be NA for untreated zones
-  ) %>%
-  arrange(desc(mean_safety_zone_score)) %>%
-  top_n(106, mean_safety_zone_score)
+  summarize(mean_safety_zone_score = mean(Safety_Zone_Score, na.rm = TRUE)) %>%
+  arrange(desc(mean_safety_zone_score))  # Sort by descending score
 
 # Get the treated zones (zones with cameras, i.e., non-null GO.LIVE.DATE)
-top_treated_zones <- complete_crash_counts %>%
+treated_zones <- complete_crash_counts %>%
   filter(!is.na(GO.LIVE.DATE)) %>%
   group_by(Name) %>%
-  summarize(
-    mean_safety_zone_score = mean(Safety_Zone_Score, na.rm = TRUE),
-    GO_LIVE_DATE = first(GO.LIVE.DATE)  # This will contain the actual GO.LIVE.DATE for treated zones
-  )
+  summarize(mean_safety_zone_score = mean(Safety_Zone_Score, na.rm = TRUE), 
+            GO_LIVE_DATE = first(GO.LIVE.DATE)) %>%  # Include GO_LIVE_DATE
+  arrange(desc(mean_safety_zone_score))  # Sort by descending score
 
-# Step 2: Combine treated and untreated zones into one dataframe
-# Add treatment group for matching purposes (1 for treated, 0 for untreated)
+# Step 2: Select top 29 untreated and top 29 treated zones based on the sorted score
+top_untreated_zones <- untreated_zones %>%
+  top_n(29, mean_safety_zone_score)
+
+top_treated_zones <- treated_zones %>%
+  top_n(29, mean_safety_zone_score)
+
+# Step 3: Combine treated and untreated zones into one dataframe with treatment group
 combined_zones <- bind_rows(
   mutate(top_untreated_zones, treatment_group = 0),  # Untreated zones
   mutate(top_treated_zones, treatment_group = 1)    # Treated zones
 )
 
-# Step 3: Perform nearest neighbor matching based on safety zone score
-# We use 'treatment_group ~ mean_safety_zone_score' for matching
-matched_data <- matchit(treatment_group ~ mean_safety_zone_score, 
-                        data = combined_zones, 
-                        method = "nearest", 
-                        caliper = 0.1)
+# Step 4: Perform nearest neighbor matching based on safety zone score
+# This step will match the highest safety zone scores in untreated with the highest in treated
+match_model <- matchit(treatment_group ~ mean_safety_zone_score, 
+                       data = combined_zones, 
+                       method = "nearest",
+                       ratio = 1)  # 1:1 matching
 
-# Step 4: Get the matched results
-matched_results <- match.data(matched_data)
+# Step 5: Get the matched results
+matched_data <- match.data(match_model)
 
-# Step 5: Inspect matched results
-str(matched_results)
+# Step 6: Extract the subclass column to ensure proper matching
+treated_data <- matched_data %>% filter(treatment_group == 1)
+control_data <- matched_data %>% filter(treatment_group == 0)
 
-# You can now proceed with analyzing the matched zones
+# Ensure GO_LIVE_DATE is treated as a date in the treated data
+treated_data <- treated_data %>%
+  mutate(GO_LIVE_DATE = as.Date(GO_LIVE_DATE, origin = "1970-01-01"))
+
+# Step 7: Merge the treated group's GO_LIVE_DATE to the untreated group by subclass
+control_data_with_dates <- control_data %>%
+  left_join(treated_data %>% select(subclass, GO_LIVE_DATE), by = "subclass", suffix = c("", "_treated"))
+
+# Step 8: Replace the GO_LIVE_DATE in the control (untreated) group with the treated GO_LIVE_DATE
+control_data_with_dates <- control_data_with_dates %>%
+  mutate(GO_LIVE_DATE = as.Date(GO_LIVE_DATE_treated, origin = "1970-01-01")) %>%
+  select(-GO_LIVE_DATE_treated)  # Remove the extra column
+
+# Step 9: Combine treated and updated control data back together
+merged_data <- bind_rows(treated_data, control_data_with_dates)
+
+# Step 10: Inspect the final merged data
+print(merged_data)
+
+
+
+#  Calculate crashes for each zone 2 years before and 2 years after GO_LIVE_DATE
+# Step 1: Calculate crashes for each zone 2 years before and 2 years after GO_LIVE_DATE
+crash_counts <- merged_data %>%
+  rowwise() %>%
+  mutate(
+    # Define the time window for 2 years before and 2 years after
+    start_date_before = GO_LIVE_DATE - lubridate::years(2),
+    end_date_after = GO_LIVE_DATE + lubridate::years(2),
+    
+    # Filter crashes 2 years before GO_LIVE_DATE and count rows
+    crashes_2yr_before = nrow(complete_crash_counts %>%
+                                filter(Name == cur_data()$Name & 
+                                         crash_date >= start_date_before & 
+                                         crash_date <= GO_LIVE_DATE)),
+    
+    # Filter crashes 2 years after GO_LIVE_DATE and count rows
+    crashes_2yr_after = nrow(complete_crash_counts %>%
+                               filter(Name == cur_data()$Name & 
+                                        crash_date > GO_LIVE_DATE & 
+                                        crash_date <= end_date_after))
+  ) %>%
+  ungroup()
+
+# Step 2: Merge crash counts with the merged_data dataframe
+merged_data_with_crashes <- merged_data %>%
+  left_join(crash_counts %>%
+              select(Name, crashes_2yr_before, crashes_2yr_after), 
+            by = "Name")
+
+# View the final dataframe with crashes
+print(merged_data_with_crashes)
