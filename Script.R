@@ -12,7 +12,6 @@ library(tidyverse)
 library(MatchIt)
 
 
-
 # Load data
 crashes <- read.csv('/Users/grant.maleski/Downloads/Traffic_Crashes_-_Crashes_20240927.csv')
 cameras <- read.csv('/Users/grant.maleski/Downloads/Speed_Camera_Locations_20240408.csv')
@@ -23,7 +22,6 @@ census_information <- read.csv("/Users/grant.maleski/Downloads/Chicago_Populatio
 
 duplicate_address <- chicago_safety_zones$Address[duplicated(chicago_safety_zones$Address)]
 length(unique(duplicate_address))
-
 
 
 
@@ -121,7 +119,6 @@ chicago_safety_zones[chicago_safety_zones$Address == "1122 W 34th Pl" & chicago_
 
 
 
-
 ## Geocode addresses via Google Maps API
 addresses <- chicago_safety_zones$Address
 chicago_addresses <- paste(addresses, ", Chicago, IL", sep = "")
@@ -166,6 +163,7 @@ crashes$crash_day <- format(crashes$CRASH_DATE, "%d")
 
 
 
+
 ## Summarize persons dataset. Since we'll need this information to analyze how Chicago...
 ## calculates where they place safety cameras
 
@@ -199,10 +197,6 @@ crash_location_list <- data.frame(
   Longitude = crash_coordinates[,1],
   Latitude = crash_coordinates[,2]
 )
-
-
-
-
 
 
 
@@ -278,10 +272,6 @@ crashes_clean <- crashes_clean %>%
               select(CRASH_RECORD_ID, distance_to_zone) %>% 
               rename(distance_to_sfzone = distance_to_zone), 
             by = "CRASH_RECORD_ID")
-
-
-
-
 
 
 
@@ -406,10 +396,10 @@ end_year <- max(crashes$crash_year)
 
 
 
-# Convert the GO.LIVE.DATE column to Date format and filter for dates after 2018 or NA
+# Convert the GO.LIVE.DATE column to Date format and filter for dates after 2020 or NA
 safety_zones_with_cameras <- safety_zones_with_cameras %>%
   mutate(GO.LIVE.DATE = as.Date(GO.LIVE.DATE, format = "%m/%d/%Y")) %>%
-  filter(is.na(GO.LIVE.DATE) | GO.LIVE.DATE >= as.Date("2018-01-01"))
+  filter(is.na(GO.LIVE.DATE) | GO.LIVE.DATE >= as.Date("2020-01-01"))
 
 # Ensure the filtering worked by checking the unique values
 unique_zones <- unique(safety_zones_with_cameras$Name)
@@ -666,13 +656,6 @@ print(paste("Estimated ATE:", ATE))
 
 
 
-
-
-
-
-
-
-
 #-----------------See crash totals pre and post treatment for each zone
 
 # Create new columns to define the 3-year pre- and post-treatment windows
@@ -698,13 +681,6 @@ print(zone_crash_summary)
 
 
 
-
-
-
-
-
-
-
 #----see how many total crashes happened in zones compared to outside zones
 # Calculate the proportion of unique crashes in buffer compared to total unique crashes
 proportion_of_crashes <- n_distinct(crashes_in_buffer_filtered$CRASH_RECORD_ID) / n_distinct(crashes$CRASH_RECORD_ID)
@@ -712,12 +688,6 @@ proportion_of_crashes <- n_distinct(crashes_in_buffer_filtered$CRASH_RECORD_ID) 
 # View the result
 print(proportion_of_crashes)
 
-#
-
-#----------Compare treated zones with not treated zones for similar sample size and sfzone score
-
-
-#----------Compare treated zones with not treated zones for similar sample size and sfzone score
 
 #----------Compare treated zones with not treated zones for similar sample size and sfzone score
 
@@ -786,33 +756,198 @@ print(merged_data)
 
 
 #  Calculate crashes for each zone 2 years before and 2 years after GO_LIVE_DATE
-# Step 1: Calculate crashes for each zone 2 years before and 2 years after GO_LIVE_DATE
+# First, create a function to classify crashes into before/after periods
 crash_counts <- merged_data %>%
-  rowwise() %>%
+  select(Name, GO_LIVE_DATE) %>%
+  distinct() %>%
+  # Cross join with complete_crash_counts to ensure we get all crashes for each zone
+  left_join(complete_crash_counts, by = "Name") %>%
+  # Add diagnostic columns
   mutate(
-    # Define the time window for 2 years before and 2 years after
-    start_date_before = GO_LIVE_DATE - lubridate::years(2),
-    end_date_after = GO_LIVE_DATE + lubridate::years(2),
-    
-    # Filter crashes 2 years before GO_LIVE_DATE and count rows
-    crashes_2yr_before = nrow(complete_crash_counts %>%
-                                filter(Name == cur_data()$Name & 
-                                         crash_date >= start_date_before & 
-                                         crash_date <= GO_LIVE_DATE)),
-    
-    # Filter crashes 2 years after GO_LIVE_DATE and count rows
-    crashes_2yr_after = nrow(complete_crash_counts %>%
-                               filter(Name == cur_data()$Name & 
-                                        crash_date > GO_LIVE_DATE & 
-                                        crash_date <= end_date_after))
+    is_before = crash_date >= (GO_LIVE_DATE - lubridate::years(2)) &
+      crash_date <= GO_LIVE_DATE,
+    is_after = crash_date > GO_LIVE_DATE &
+      crash_date <= (GO_LIVE_DATE + lubridate::years(2))
+  ) %>%
+  # Only keep records within our 2-year window
+  filter(!is.na(crash_date)) %>%
+  group_by(Name) %>%
+  summarize(
+    crashes_2yr_before = sum(total_crashes[is_before], na.rm = TRUE),
+    crashes_2yr_after = sum(total_crashes[is_after], na.rm = TRUE),
+    avg_monthly_crashes_before = crashes_2yr_before / sum(is_before, na.rm = TRUE),
+    avg_monthly_crashes_after = crashes_2yr_after / sum(is_after, na.rm = TRUE)
   ) %>%
   ungroup()
 
-# Step 2: Merge crash counts with the merged_data dataframe
-merged_data_with_crashes <- merged_data %>%
-  left_join(crash_counts %>%
-              select(Name, crashes_2yr_before, crashes_2yr_after), 
-            by = "Name")
 
-# View the final dataframe with crashes
-print(merged_data_with_crashes)
+
+
+# Merge with original data
+merged_data_with_crashes <- merged_data %>%
+  left_join(crash_counts, by = "Name")
+
+
+
+# Calculate ATT using the crash data
+att_analysis <- merged_data_with_crashes %>%
+  # First ensure we only look at treated units (D=1)
+  filter(treatment_group == 1) %>%
+  # Calculate the observed difference for each treated unit
+  mutate(
+    # Y(D=1) is the observed outcome after treatment
+    Y_D1 = crashes_2yr_after,
+    # Y(D=0) is the observed outcome before treatment
+    Y_D0 = crashes_2yr_before,
+    # Individual treatment effect
+    individual_effect = Y_D1 - Y_D0
+  ) %>%
+  # Calculate summary statistics
+  summarize(
+    n_treated = n(),
+    # ATT = E[Y(D=1)|D=1] - E[Y(D=0)|D=1]
+    mean_Y_D1 = mean(Y_D1),
+    mean_Y_D0 = mean(Y_D0),
+    att = mean(individual_effect),
+    # Calculate standard error
+    se_att = sd(individual_effect) / sqrt(n()),
+    # Calculate 95% confidence interval
+    ci_lower = att - 1.96 * se_att,
+    ci_upper = att + 1.96 * se_att,
+    # Calculate percentage change
+    percent_change = (mean_Y_D1 - mean_Y_D0) / mean_Y_D0 * 100
+  )
+
+# Print detailed results
+print("Average Treatment Effect on the Treated (ATT) Analysis:")
+print(att_analysis)
+
+# Create visualization of individual treatment effects
+treatment_effects <- merged_data_with_crashes %>%
+  filter(treatment_group == 1) %>%
+  mutate(
+    effect = crashes_2yr_after - crashes_2yr_before,
+    percent_change = (crashes_2yr_after - crashes_2yr_before) / crashes_2yr_before * 100
+  ) %>%
+  arrange(effect)
+
+# Print distribution of effects
+print("\nDistribution of Individual Treatment Effects:")
+print(summary(treatment_effects$effect))
+
+# Print locations with largest effects (both positive and negative)
+print("\nTop 5 Locations with Largest Crash Reductions:")
+treatment_effects %>%
+  arrange(effect) %>%
+  select(Name, crashes_2yr_before, crashes_2yr_after, effect, percent_change) %>%
+  head(5) %>%
+  print()
+
+print("\nTop 5 Locations with Largest Crash Increases (if any):")
+treatment_effects %>%
+  arrange(desc(effect)) %>%
+  select(Name, crashes_2yr_before, crashes_2yr_after, effect, percent_change) %>%
+  head(5) %>%
+  print()
+
+# Additional robustness check - paired t-test
+ttest_result <- t.test(
+  treatment_effects$crashes_2yr_after,
+  treatment_effects$crashes_2yr_before,
+  paired = TRUE
+)
+
+print("\nPaired t-test Results:")
+print(ttest_result)
+
+
+
+
+
+# Calculate treatment effects with comparison to control group
+did_analysis <- merged_data_with_crashes %>%
+  group_by(treatment_group) %>%
+  summarize(
+    n_units = n(),
+    mean_before = mean(crashes_2yr_before),
+    mean_after = mean(crashes_2yr_after),
+    diff = mean_after - mean_before,
+    se_diff = sd(crashes_2yr_after - crashes_2yr_before) / sqrt(n()),
+    ci_lower = diff - 1.96 * se_diff,
+    ci_upper = diff + 1.96 * se_diff,
+    percent_change = (mean_after - mean_before) / mean_before * 100
+  ) %>%
+  ungroup()
+
+# Calculate the difference-in-differences estimate
+did_estimate <- did_analysis %>%
+  summarize(
+    diff_in_diff = diff[treatment_group == 1] - diff[treatment_group == 0],
+    se_did = sqrt(se_diff[treatment_group == 1]^2 + se_diff[treatment_group == 0]^2),
+    ci_lower = diff_in_diff - 1.96 * se_did,
+    ci_upper = diff_in_diff + 1.96 * se_did,
+    relative_effect = (diff[treatment_group == 1] / mean_before[treatment_group == 1]) - 
+      (diff[treatment_group == 0] / mean_before[treatment_group == 0])
+  )
+
+# Formal statistical test using regression
+did_regression <- lm(
+  crashes_2yr_after - crashes_2yr_before ~ treatment_group, 
+  data = merged_data_with_crashes
+)
+
+# Print results
+print("Summary by Treatment Group:")
+print(did_analysis)
+
+print("\nDifference-in-Differences Estimate:")
+print(did_estimate)
+
+print("\nRegression Results:")
+print(summary(did_regression))
+
+# Calculate individual unit changes
+unit_changes <- merged_data_with_crashes %>%
+  mutate(
+    change = crashes_2yr_after - crashes_2yr_before,
+    percent_change = (crashes_2yr_after - crashes_2yr_before) / crashes_2yr_before * 100
+  ) %>%
+  arrange(treatment_group, desc(abs(change)))
+
+# Print summary statistics by group
+print("\nDetailed Summary Statistics:")
+unit_changes %>%
+  group_by(treatment_group) %>%
+  summarize(
+    n = n(),
+    mean_change = mean(change),
+    median_change = median(change),
+    sd_change = sd(change),
+    mean_percent_change = mean(percent_change),
+    min_change = min(change),
+    max_change = max(change)
+  ) %>%
+  print()
+
+# Print top changes for each group
+print("\nLargest Changes in Treated Group:")
+unit_changes %>%
+  filter(treatment_group == 1) %>%
+  select(Name, crashes_2yr_before, crashes_2yr_after, change, percent_change) %>%
+  arrange(desc(abs(change))) %>%
+  head(5) %>%
+  print()
+
+print("\nLargest Changes in Control Group:")
+unit_changes %>%
+  filter(treatment_group == 0) %>%
+  select(Name, crashes_2yr_before, crashes_2yr_after, change, percent_change) %>%
+  arrange(desc(abs(change))) %>%
+  head(5) %>%
+  print()
+
+# Additional balance check
+print("\nBalance Check - Pre-treatment Crashes:")
+t.test(crashes_2yr_before ~ treatment_group, data = merged_data_with_crashes)
+
+
