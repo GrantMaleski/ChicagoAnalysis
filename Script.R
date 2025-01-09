@@ -10,6 +10,7 @@ library(dplyr)
 library(tidygeocoder)
 library(tidyverse)
 library(MatchIt)
+library(knitr)
 
 
 # Load data
@@ -20,9 +21,11 @@ chicago_map <- read_sf("/Users/grant.maleski/Downloads/WARDS_2015")
 people <- read.csv('/Users/grant.maleski/Downloads/Traffic_Crashes_-_People_20240927.csv')
 census_information <- read.csv("/Users/grant.maleski/Downloads/Chicago_Population_Counts_20240927.csv", check.names = FALSE)
 
+
+
+#see how many duplicated safety zones there are in Chicago
 duplicate_address <- chicago_safety_zones$Address[duplicated(chicago_safety_zones$Address)]
 length(unique(duplicate_address))
-
 
 
 
@@ -110,7 +113,6 @@ chicago_safety_zones[chicago_safety_zones$Address == "2031 S Peoria St" & chicag
 chicago_safety_zones[chicago_safety_zones$Address == "6621 N Western Ave" & chicago_safety_zones$Name == "Warren" , "Name"] <-"Warren (Laurence) Park"
 chicago_safety_zones[chicago_safety_zones$Address == "5531 S MLK Jr. Dr" & chicago_safety_zones$Name == "Washington" , "Name"] <-"Washington (George) Park"
 chicago_safety_zones[chicago_safety_zones$Address == "5625 S Mobile Ave" & chicago_safety_zones$Name == "Wentworth" , "Name"] <-"Wentworth (John) Park"
-
 chicago_safety_zones[chicago_safety_zones$Address == "8215 S Euclid Ave" & chicago_safety_zones$Name == "Washington" , "Name"] <-"Washington (Dinah) Park"
 chicago_safety_zones[chicago_safety_zones$Address == "3770 S Wentworth Ave" & chicago_safety_zones$Name == "Wentworth" , "Name"] <-"Wentworth Gardens (John) Park"
 chicago_safety_zones[chicago_safety_zones$Address == "400 W 123rd St" & chicago_safety_zones$Name == "West Pullman" , "Name"] <-"West Pullman Park"
@@ -119,7 +121,7 @@ chicago_safety_zones[chicago_safety_zones$Address == "1122 W 34th Pl" & chicago_
 
 
 
-## Geocode addresses via Google Maps API
+### Geocode addresses via Google Maps API
 addresses <- chicago_safety_zones$Address
 chicago_addresses <- paste(addresses, ", Chicago, IL", sep = "")
 geocoded_df <- tibble(address = chicago_addresses) %>%
@@ -127,7 +129,7 @@ geocoded_df <- tibble(address = chicago_addresses) %>%
 
 coordinates_df <- data.frame(lat = geocoded_df$lat, lon = geocoded_df$long)
 
-# Perform reverse geocoding to get zip codes
+#Perform reverse geocoding to get zip codes
 geocoded_with_zip <- reverse_geocode(
   .tbl = coordinates_df,  # Pass the data frame with lat/lon
   lat = "lat",            # Specify the latitude column
@@ -148,8 +150,7 @@ chicago_safety_zones_list <- data.frame(
 
 
 
-
-# Process dates
+##--- Process dates
 cameras$go.live.date <- as.Date(cameras$GO.LIVE.DATE, format = "%m/%d/%Y")
 cameras$year <- format(cameras$go.live.date, "%Y")
 cameras$month <- format(cameras$go.live.date, "%m")
@@ -159,6 +160,12 @@ crashes$CRASH_DATE <- as.Date(crashes$CRASH_DATE, format = "%m/%d/%Y")
 crashes$crash_year <- format(crashes$CRASH_DATE, "%Y")
 crashes$crash_month <- format(crashes$CRASH_DATE, "%m")
 crashes$crash_day <- format(crashes$CRASH_DATE, "%d")
+
+#count how many unique days cameras have been impelemented on 
+length(unique(cameras$go.live.date))
+
+#count how many unique days cameras have been impelemented on 
+length(unique(cameras$ADDRESS))
 
 
 
@@ -180,18 +187,25 @@ crash_person_summary <- people %>%
 crashes_clean <- crashes %>%
   filter(!is.na(LONGITUDE) & !is.na(LATITUDE))
 
-# Join crashes df with crash_person_summary so we know who is involved in each crash
+
+
+###-- Join crashes df with crash_person_summary so we know who is involved in each crash
 crashes_clean <- crashes_clean %>%
   left_join(crash_person_summary, by = "CRASH_RECORD_ID", suffix = c("_sf", "_summary"))
 
-# Convert to sf object to preppare for geospatial calculations
+# count how many crashes we filtered out
+
+count(crashes) - count(crashes_clean) 
+# 6244
+
+# ---Convert to sf object to preppare for geospatial calculations
 crashes_sf <- st_as_sf(crashes_clean, coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
 
 #collect coordinates from crashes geospatial df
 crash_coordinates <- st_coordinates(crashes_sf)
 
 
-# Create crash_location_list
+#-- Create crash_location_list
 crash_location_list <- data.frame(
   CRASH_RECORD_ID = crashes_clean$CRASH_RECORD_ID,
   Longitude = crash_coordinates[,1],
@@ -200,7 +214,7 @@ crash_location_list <- data.frame(
 
 
 
-
+#structure location of all cameras
 camera_location_list <- data.frame(Latitude = cameras$LATITUDE, 
                                    Longitude = cameras$LONGITUDE)
 
@@ -275,28 +289,95 @@ crashes_clean <- crashes_clean %>%
 
 
 
-##Count cameras by year to help us determine a before and after date for Avg Affect of Treatment
-cameras_year_counts <- table(cameras$year)
-print(cameras_year_counts)
 
-## Count crashes by year
-crashes_year_counts <- table(crashes_clean$crash_year)
-print(crashes_year_counts)
 
 
 
 ## Count crashes near cameras and safety zones
 treated_crashes <- sum(crashes_clean$distance_to_camera.x < 201, na.rm = TRUE)
 print(treated_crashes)
+
+
 sfzone_crashes <- sum(crashes_clean$distance_to_sfzone.y < 201, na.rm = TRUE)
 print(sfzone_crashes)
 
 
-# Convert safety zones and cameras to sf objects
+
+yearly_crashes <- crashes_clean %>%
+  filter(crash_year >= 2018 & crash_year <= 2023) %>%
+  group_by(crash_year) %>%
+  summarize(
+    all_crashes = n(),
+    near_zone = sum(distance_to_sfzone.y < 201, na.rm = TRUE),
+    near_camera = sum(distance_to_camera.x < 201, na.rm = TRUE)
+  )
+
+# Convert to long format for plotting  
+yearly_crashes_long <- yearly_crashes %>%
+  pivot_longer(cols = c(all_crashes, near_zone, near_camera),
+               names_to = "category",
+               values_to = "count") %>%
+  mutate(category = factor(category, 
+                           levels = c("all_crashes", "near_zone", "near_camera")))  # Set order here
+
+# Create plot
+ggplot(yearly_crashes_long, aes(x=crash_year, y=count, fill=category)) +
+  geom_bar(stat="identity", position="dodge") +
+  theme_minimal() +
+  labs(x="Year", y="Number of Crashes", title="Crash Comparison by Year (2018-2023)") +
+  scale_fill_manual(values=c("all_crashes"="#8884d8", 
+                             "near_zone"="#ffc658",
+                             "near_camera"="#82ca9d"),
+                    labels=c("All Crashes", "Near Safety Zones", "Near Cameras")) +
+  theme(legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5))  # Added this line to center title
+
+
+
+zone_camera_summary <- yearly_crashes %>%
+  summarize(
+    avg_all = mean(all_crashes),
+    avg_zone = mean(near_zone),
+    avg_camera = mean(near_camera)
+  ) %>%
+  mutate(
+    zone_percentage = (avg_zone / avg_all) * 100,
+    camera_percentage = (avg_camera / avg_all) * 100
+  )
+
+
+
+
+
+
+
+###-- Convert safety zones and cameras to sf objects
 cameras_sf <- st_as_sf(cameras, coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
 
 # Find the nearest safety zone for each camera
 nearest_safety_zone <- st_nearest_feature(cameras_sf, chicago_safety_zones_list_sf)
+
+
+# Calculate the distance for each nearest neighbor
+distances_to_safety_zones <- st_distance(
+  cameras_sf, 
+  chicago_safety_zones_list_sf[nearest_safety_zone, ], 
+  by_element = TRUE
+)
+
+# Add the nearest safety zone index and distance as columns in the cameras_sf dataset
+cameras_sf <- cameras_sf %>%
+  mutate(
+    nearest_safety_zone = nearest_safety_zone,
+    distance_to_safety_zone = as.numeric(distances_to_safety_zones) # Convert distance to numeric if needed
+  )
+
+# View the result
+mean(cameras_sf$distance_to_safety_zone)
+
+
+
+
 
 # Create a dataframe of camera assignments
 camera_assignments <- data.frame(
@@ -314,7 +395,7 @@ safety_zones_with_cameras <- chicago_safety_zones_list_sf %>%
     by = c("camera_id" = "ID")
   )
 
-# Replace NA with "N/A" for camera-related columns
+#--Replace NA with "N/A" for camera-related columns
 safety_zones_with_cameras <- safety_zones_with_cameras %>%
   mutate(across(c(camera_id, GO.LIVE.DATE, LOCATION.ID), ~ifelse(is.na(.), NA, as.character(.))))
 
@@ -488,197 +569,6 @@ complete_crash_counts <- complete_crash_counts %>%
 
 
 
-#-------------- perform ATT calculation
-
-
-# Create treatment and control groups based on GO.LIVE.DATE
-complete_crash_counts <- complete_crash_counts %>%
-  mutate(
-    # Assign treatment group based on the availability of GO.LIVE.DATE and its comparison to crash_date
-    treatment_group = case_when(
-      is.na(GO.LIVE.DATE) ~ 0,  # Control: No camera installed (NA in GO.LIVE.DATE)
-      !is.na(GO.LIVE.DATE) & crash_date < GO.LIVE.DATE ~ 0,  # Control: Crash occurred before camera installation
-      !is.na(GO.LIVE.DATE) & crash_date >= GO.LIVE.DATE ~ 1  # Treatment: Crash occurred after camera installation
-    ),
-    # Define the period based on crash_date relative to GO.LIVE.DATE
-    period = case_when(
-      is.na(GO.LIVE.DATE) ~ "control",              # Control: No camera installed
-      crash_date < GO.LIVE.DATE ~ "pre",            # Pre-treatment if crash occurred before camera installation
-      crash_date >= GO.LIVE.DATE ~ "post",          # Post-treatment if crash occurred on or after camera installation
-      TRUE ~ NA_character_                          # Exclude cases not fitting the criteria
-    )
-  ) %>%
-  filter(!is.na(period))  # Exclude any rows that don't fit into pre or post categories
-
-
-# Aggregate crashes (sum pre and post crash counts by zone and treatment group)
-aggregated_crashes_wide <- complete_crash_counts %>%
-  group_by(Name, treatment_group) %>%
-  summarise(
-    total_crashes_post = sum(total_crashes[period == "post"], na.rm = TRUE),
-    total_crashes_pre = sum(total_crashes[period == "pre"], na.rm = TRUE),
-    crash_difference = total_crashes_post - total_crashes_pre,
-    .groups = 'drop'
-  )
-
-# Estimate the counterfactual crashes for treated zones
-# Aggregate crashes for control units (without cameras)
-control_crashes <- aggregated_crashes_wide %>%
-  filter(treatment_group == 0) %>%
-  summarise(
-    control_total_crashes_post = mean(total_crashes_post, na.rm = TRUE),
-    control_total_crashes_pre = mean(total_crashes_pre, na.rm = TRUE)
-  )
-
-# Apply control crash rates to treated zones to estimate counterfactual
-treated_crashes_with_counterfactual <- aggregated_crashes_wide %>%
-  filter(treatment_group == 1) %>%
-  mutate(
-    counterfactual_crashes_post = control_crashes$control_total_crashes_post,
-    counterfactual_crashes_pre = control_crashes$control_total_crashes_pre
-  ) %>%
-  mutate(
-    counterfactual_difference = counterfactual_crashes_post - counterfactual_crashes_pre
-  )
-
-# Calculate ATT
-att_results <- treated_crashes_with_counterfactual %>%
-  summarise(
-    observed_crash_difference = mean(crash_difference, na.rm = TRUE),
-    average_counterfactual_difference = mean(counterfactual_difference, na.rm = TRUE)
-  ) %>%
-  mutate(
-    ATT = observed_crash_difference - average_counterfactual_difference
-  )
-
-# Print ATT result
-print("ATT Results:")
-print(att_results)
-
-# Count the number of unique zones in the treated group
-number_of_treated_zones <- complete_crash_counts %>%
-  filter(treatment_group == 1) %>%
-  summarise(number_of_zones = n_distinct(Name))
-
-print(number_of_treated_zones)
-
-
-#----------ATT controlled for SFzone score by matching
-
-
-# Perform nearest neighbor matching with 1:1 matching and a caliper
-match_model <- matchit(treatment_group ~ Safety_Zone_Score, 
-                       data = complete_crash_counts, 
-                       method = "nearest", 
-                       ratio = 1,  # 1:1 matching (each treated unit matched to one control)
-                       caliper = 0.5)  # Caliper restricts matching to closer matches
-
-# Get matched data
-matched_data <- match.data(match_model)
-
-# Check the number of treated and untreated groups
-table(matched_data$treatment_group)
-
-# Now you can analyze the matched data
-matched_results <- matched_data %>%
-  group_by(treatment_group) %>%
-  summarise(
-    average_crashes = mean(total_crashes, na.rm = TRUE),
-    .groups = 'drop'
-  )
-
-
-#---------------ATT controlled by stratisfication
-
-# Define quantiles to create strata based on Safety Zone Score
-complete_crash_counts <- complete_crash_counts %>%
-  mutate(score_strata = ntile(Safety_Zone_Score, 3))  # Creates 3 strata (low, medium, high)
-
-# Now you can run your analysis within each stratum
-stratified_results <- complete_crash_counts %>%
-  group_by(score_strata) %>%
-  summarise(
-    observed_crash_difference = mean(total_crashes[treatment_group == 1], na.rm = TRUE) - 
-      mean(total_crashes[treatment_group == 0], na.rm = TRUE),
-    .groups = 'drop'
-  )
-
-print(stratified_results)
-
-
-#----------- Estimate ATE: Hypothetical models
-# Use the ATT value from att_results
-ATT_value <- att_results$ATT  # Extract the ATT value
-
-# Create a hypothetical world where all zones have cameras
-hypothetical_all_cameras <- complete_crash_counts %>%
-  mutate(
-    total_crashes = total_crashes + ATT_value,  # Adjust crashes by ATT value for treated group
-    treatment_group = 1
-  )
-
-# Create a hypothetical world where no zones have cameras
-hypothetical_no_cameras <- complete_crash_counts %>%
-  mutate(
-    total_crashes = total_crashes,  # No adjustment for control group
-    treatment_group = 0
-  )
-
-# Aggregate crashes for hypothetical worlds
-agg_all_cameras <- hypothetical_all_cameras %>%
-  group_by(Name) %>%  # Aggregate across all zones
-  summarise(
-    total_crashes_post = sum(total_crashes[period == "post"], na.rm = TRUE),
-    total_crashes_pre = sum(total_crashes[period == "pre"], na.rm = TRUE),
-    crash_difference = total_crashes_post - total_crashes_pre,
-    .groups = 'drop'
-  ) %>%
-  summarise(
-    average_crash_difference = mean(crash_difference, na.rm = TRUE)
-  )
-
-agg_no_cameras <- hypothetical_no_cameras %>%
-  group_by(Name) %>%  # Aggregate across all zones
-  summarise(
-    total_crashes_post = sum(total_crashes[period == "post"], na.rm = TRUE),
-    total_crashes_pre = sum(total_crashes[period == "pre"], na.rm = TRUE),
-    crash_difference = total_crashes_post - total_crashes_pre,
-    .groups = 'drop'
-  ) %>%
-  summarise(
-    average_crash_difference = mean(crash_difference, na.rm = TRUE)
-  )
-
-# Calculate and print ATE
-ATE <- agg_all_cameras$average_crash_difference - agg_no_cameras$average_crash_difference
-print(paste("Estimated ATE:", ATE))
-
-
-
-
-#-----------------See crash totals pre and post treatment for each zone
-
-# Create new columns to define the 3-year pre- and post-treatment windows
-segmented_complete_crash_counts <- complete_crash_counts %>%
-  mutate(
-    pre_treatment_start = GO.LIVE.DATE - years(2),  # Start date for the pre-treatment period (2 years before GO.LIVE.DATE)
-    post_treatment_end = GO.LIVE.DATE + years(2),   # End date for the post-treatment period (2 years after GO.LIVE.DATE)
-    within_pre_treatment = ifelse(crash_date >= pre_treatment_start & crash_date < GO.LIVE.DATE, 1, 0),  # 1 if crash is within 3 years before treatment
-    within_post_treatment = ifelse(crash_date > GO.LIVE.DATE & crash_date <= post_treatment_end, 1, 0)   # 1 if crash is within 3 years after treatment
-  )
-
-# Aggregate crashes by zone for the pre- and post-treatment periods
-zone_crash_summary <- segmented_complete_crash_counts %>%
-  group_by(Name) %>%
-  summarise(
-    crashes_pre_treatment = sum(within_pre_treatment, na.rm = TRUE),  # Total crashes in the 3 years before GO.LIVE.DATE
-    crashes_post_treatment = sum(within_post_treatment, na.rm = TRUE) # Total crashes in the 3 years after GO.LIVE.DATE
-  )
-
-# View the summary for each zone
-print(zone_crash_summary)
-
-
 
 
 #----see how many total crashes happened in zones compared to outside zones
@@ -707,17 +597,16 @@ treated_zones <- complete_crash_counts %>%
             GO_LIVE_DATE = first(GO.LIVE.DATE)) %>%  # Include GO_LIVE_DATE
   arrange(desc(mean_safety_zone_score))  # Sort by descending score
 
-# Step 2: Select top 29 untreated and top 29 treated zones based on the sorted score
+# Step 2: Select top 22 untreated and top 22 treated zones based on the sorted score
 top_untreated_zones <- untreated_zones %>%
-  top_n(29, mean_safety_zone_score)
+  top_n(22, mean_safety_zone_score)
 
-top_treated_zones <- treated_zones %>%
-  top_n(29, mean_safety_zone_score)
+
 
 # Step 3: Combine treated and untreated zones into one dataframe with treatment group
 combined_zones <- bind_rows(
   mutate(top_untreated_zones, treatment_group = 0),  # Untreated zones
-  mutate(top_treated_zones, treatment_group = 1)    # Treated zones
+  mutate(treated_zones, treatment_group = 1)    # Treated zones
 )
 
 # Step 4: Perform nearest neighbor matching based on safety zone score
@@ -787,6 +676,7 @@ crash_counts <- merged_data %>%
 merged_data_with_crashes <- merged_data %>%
   left_join(crash_counts, by = "Name")
 
+write.csv(merged_data_with_crashes, "crash_data.csv", row.names = F)
 
 
 # Calculate ATT using the crash data
@@ -824,12 +714,13 @@ print(att_analysis)
 
 # Create visualization of individual treatment effects
 treatment_effects <- merged_data_with_crashes %>%
-  filter(treatment_group == 1) %>%
   mutate(
     effect = crashes_2yr_after - crashes_2yr_before,
     percent_change = (crashes_2yr_after - crashes_2yr_before) / crashes_2yr_before * 100
   ) %>%
   arrange(effect)
+
+write.csv(treatment_effects, "treatment_effects.csv", row.names = F)
 
 # Print distribution of effects
 print("\nDistribution of Individual Treatment Effects:")
@@ -949,5 +840,173 @@ unit_changes %>%
 # Additional balance check
 print("\nBalance Check - Pre-treatment Crashes:")
 t.test(crashes_2yr_before ~ treatment_group, data = merged_data_with_crashes)
+
+
+
+
+
+
+#----------analysis
+
+# Count cameras by year
+cameras_year_counts <- as.data.frame(table(cameras$year))
+colnames(cameras_year_counts) <- c("Year", "Count")
+
+
+
+# Reshape data to wide format, with years as column names
+cameras_wide_format <- cameras_year_counts %>%
+  pivot_wider(names_from = Year, values_from = Count, values_fill = 0)
+
+# Display the table with each year as a column
+kable(
+  cameras_wide_format,
+  caption = "Number of Cameras Implemented by Year",
+  align = "c"
+)
+
+# Count crashes by year
+crashes_year_counts <- as.data.frame(table(crashes_clean$crash_year))
+colnames(crashes_year_counts) <- c("Year", "Count")
+
+
+
+# Convert Year to numeric for better plotting control
+crashes_year_counts$Year <- as.numeric(as.character(crashes_year_counts$Year))
+crashes_year_counts <- crashes_year_counts[crashes_year_counts$Year >= 2018 & crashes_year_counts$Year <= 2023, ]
+
+ggplot(crashes_year_counts, aes(x = Year, y = Count)) +
+  geom_col(fill = "blue", alpha = 0.7) +
+  geom_text(aes(label = scales::comma(Count)), vjust = -0.5) +
+  labs(title = "Crashes by Year (2018-2023)",
+       x = "Year", 
+       y = "Crashes") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_x_continuous(breaks = 2018:2023) +
+  scale_y_continuous(labels = scales::comma)
+
+
+
+#---count crashes between 2018 and 2023
+crashes_year_counts <- as.data.frame(table(crashes_clean$crash_year))
+colnames(crashes_year_counts) <- c("Year", "Count")
+
+# Step 2: Convert Year column to numeric for filtering purposes
+crashes_year_counts$Year <- as.numeric(as.character(crashes_year_counts$Year))
+
+# Step 3: Filter for years between 2018 and 2023
+crashes_2018_2023 <- crashes_year_counts %>%
+  filter(Year >= 2018 & Year <= 2023)
+
+# Step 4: Calculate the average crash count for these years
+average_crashes_2018_2023 <- mean(crashes_2018_2023$Count)
+
+# Display the result
+print(average_crashes_2018_2023)
+
+
+
+
+# Reshape the data with ordered periods
+did_data <- merged_data_with_crashes %>%
+  select(Name, treatment_group, crashes_2yr_before, crashes_2yr_after) %>%
+  gather(key = "period", value = "crashes", 
+         crashes_2yr_before, crashes_2yr_after) %>%
+  mutate(
+    period = factor(ifelse(period == "crashes_2yr_before", "Before", "After"), 
+                    levels = c("Before", "After")),  # Explicitly set order
+    group = ifelse(treatment_group == 1, "Treatment", "Control")
+  )
+
+# Calculate means for each group and period
+did_means <- did_data %>%
+  group_by(group, period) %>%
+  summarize(
+    mean_crashes = mean(crashes),
+    se = sd(crashes)/sqrt(n())
+  )
+
+# Create the DiD plot
+ggplot(did_means, aes(x = period, y = mean_crashes, group = group, linetype = group)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_crashes - 1.96*se, 
+                    ymax = mean_crashes + 1.96*se), 
+                width = 0.1) +
+  scale_linetype_manual(values = c("Treatment" = "solid", "Control" = "dashed")) +
+  theme_minimal() +
+  labs(
+    title = "Impact of Speed Cameras on Crash Frequency",
+    x = "Period Relative to Camera Installation",
+    y = "Average Number of Crashes",
+    linetype = "Group"
+  ) +
+  theme(
+    legend.position = "bottom",
+    text = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(color = "black")
+  )
+
+
+# Treatment Effect Distribution Plot
+ggplot(treatment_effects, 
+       aes(x = reorder(Name, effect), 
+           y = effect,
+           fill = factor(treatment_group))) +
+  geom_bar(stat = "identity", alpha = 0.7) +
+  coord_flip() +
+  theme_minimal() +
+  scale_fill_manual(values = c("0" = "black", "1" = "gray50"),
+                    labels = c("Untreated", "Treated")) +
+  labs(
+    title = "Distribution of Treatment Effects Across Locations",
+    x = "Location",
+    y = "Change in Number of Crashes",
+    fill = "Group"
+  ) +
+  theme(
+    axis.text.y = element_text(size = 8),
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.position = "bottom",
+    panel.grid.major.y = element_blank()
+  ) +
+  # Add borders to bars
+  geom_bar(stat = "identity", fill = NA, color = "black", alpha = 0.7)
+
+
+
+
+# Create simple crash analysis for matched zones
+crash_analysis <- complete_crash_counts %>%
+  filter(Name %in% merged_data_with_crashes$Name) %>%
+  mutate(
+    date = as.Date(paste(crash_year, crash_month, "01", sep = "-")),
+    treated = if_else(!is.na(GO.LIVE.DATE), "Camera Zones", "Control Zones")
+  ) %>%
+  filter(crash_year >= 2018 & crash_year < 2024) %>%
+  group_by(treated, date) %>%
+  summarise(total_crashes = sum(total_crashes, na.rm = TRUE))
+
+# Black and white plot with centered title
+ggplot(crash_analysis, aes(x = date, y = total_crashes, 
+                           linetype = treated)) +
+  geom_line(size = 1) +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Monthly Crashes in Matched Zones (2018-2023)",
+       x = "", y = "Crashes") +
+  theme(legend.position = "top",
+        plot.title = element_text(hjust = 0.5)) +
+  scale_linetype_manual(values = c("Camera Zones" = "solid", "Control Zones" = "twodash")) +
+  guides(linetype = guide_legend(title = ""))
+
+
+
+
+
+
 
 
